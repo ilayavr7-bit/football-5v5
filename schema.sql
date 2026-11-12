@@ -8,8 +8,10 @@ create table if not exists match_settings (
   price int default 20,
   bit_link text default 'https://www.bitpay.co.il/app/share-info?i=2prr9sGd&j=true',
   team_colors jsonb default '["שחור", "לבן", "אדום"]',
-  teams_published boolean default false
+  teams_published boolean default false,
+  title text default 'כדורגל וייסגל'
 );
+alter table match_settings add column if not exists title text default 'כדורגל וייסגל'; -- for projects created earlier
 insert into match_settings (id) values (1) on conflict do nothing;
 
 create table if not exists player_ratings (

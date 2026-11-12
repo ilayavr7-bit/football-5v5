@@ -42,11 +42,18 @@ function Countdown({ since }) {
 const Shell = ({ title, children }) => (
   <div className="min-h-screen">
     <header className="bg-pitch text-chalk px-4 pt-8 pb-6">
-      <div className="max-w-xl mx-auto"><h1 className="text-3xl font-extrabold">{title}</h1></div>
+      <div className="max-w-xl mx-auto"><h1 className="text-3xl font-extrabold text-center">{title}</h1></div>
     </header>
     <main className="max-w-xl mx-auto px-4 py-5 space-y-6">{children}</main>
   </div>
 )
+
+const Ico = ({ children }) => (
+  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
+)
+const CalendarIcon = () => <Ico><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></Ico>
+const ClockIcon = () => <Ico><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></Ico>
+const PinIcon = () => <Ico><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z" /><circle cx="12" cy="10" r="2.5" /></Ico>
 
 const btn = 'rounded-lg px-4 py-2 font-medium disabled:opacity-50'
 
@@ -90,21 +97,37 @@ function Player() {
   }
 
   if (!settings) return <Shell title="טוען…" />
+  const parts = (settings.match_time || '').split(',').map((s) => s.trim()).filter(Boolean)
+  const matchDay = parts[0] || ''
+  const matchHour = parts.slice(1).join(', ')
   return (
-    <Shell title="כדורגל חמישיות">
+    <Shell title={settings.title || 'כדורגל וייסגל'}>
+      <section className="bg-white/90 rounded-2xl shadow-md px-4 py-5 text-center space-y-3">
+        <div className="flex items-center justify-center gap-2 text-2xl font-extrabold text-pitch">
+          <CalendarIcon />{matchDay}
+        </div>
+        {matchHour && (
+          <div className="flex items-center justify-center gap-2 text-2xl font-extrabold text-pitch">
+            <ClockIcon /><span dir="ltr">{matchHour}</span>
+          </div>
+        )}
+        <div className="flex items-center justify-center gap-2 text-xl font-bold">
+          <PinIcon />{settings.location}
+        </div>
+      </section>
+
       <section>
-        <p className="text-lg font-medium">{settings.match_time}</p>
-        <p className="text-stone-600">{settings.location}</p>
         <a href={settings.bit_link} target="_blank" rel="noreferrer"
-          className="mt-4 block text-center bg-bib text-white font-bold text-xl rounded-xl py-4">
+          className="block text-center bg-bib text-white font-bold text-xl rounded-xl py-4 shadow-md">
           תשלום ב-Bit · {settings.price} ₪
         </a>
+        <p className="mt-2 text-sm text-stone-600 text-center">אם משלמים ב-Bit מחשבון אחר, יש לציין בהערה את שם השחקן</p>
       </section>
 
       {settings.teams_published && <Teams colors={settings.team_colors} players={confirmed} />}
 
       <form onSubmit={submit} className="space-y-3">
-        <label className="block font-medium" htmlFor="n">שם מלא</label>
+        <label className="block font-medium text-center" htmlFor="n">שם מלא</label>
         <input id="n" value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={40}
           className="w-full rounded-lg border border-stone-300 bg-white px-3 py-3" />
         <button disabled={busy} className={`${btn} w-full bg-pitch text-chalk`}>הירשם למשחק</button>
@@ -260,9 +283,14 @@ function Admin() {
       </List>
       <List title="מגיעים" items={by('confirmed')}>
         {(r) => <>
-          {rate(r)}{!r.is_paid && <span className="text-sm text-stone-600"><Countdown since={r.approved_at} /></span>}
-          <button className={`${btn} ${r.is_paid ? 'bg-green-700 text-white' : 'bg-stone-200'}`}
-            onClick={act('admin_set_paid', { p_id: r.id, p_paid: !r.is_paid })}>{r.is_paid ? 'שולם' : 'לא שולם'}</button>
+          {rate(r)}
+          <select aria-label={`סטטוס תשלום ${r.player_name}`} value={r.is_paid ? 'true' : 'false'}
+            onChange={(e) => act('admin_set_paid', { p_id: r.id, p_paid: e.target.value === 'true' })()}
+            className={`rounded border px-1 py-1 ${r.is_paid ? 'bg-green-50 text-green-800 border-green-300' : 'bg-red-50 text-red-800 border-red-300'}`}>
+            <option value="false">לא שולם</option>
+            <option value="true">שולם</option>
+          </select>
+          {!r.is_paid && <span className="text-sm text-stone-600"><Countdown since={r.approved_at} /></span>}
           {remove(r)}
         </>}
       </List>
