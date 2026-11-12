@@ -1,0 +1,8 @@
+@import "tailwindcss";
+@theme {
+  --font-sans: "Rubik", system-ui, sans-serif;
+  --color-pitch: #14432b;
+  --color-chalk: #f6f4ee;
+  --color-bib: #ff6a13;
+}
+body { background: var(--color-chalk); color: #16241c; }
