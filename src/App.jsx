@@ -3,6 +3,9 @@ import { supabase, rpc } from './supabase'
 import { balance } from './balance'
 
 const CAP = 15
+const RATING_STEPS = Array.from({ length: 9 }, (_, i) => 1 + i / 2) // 1, 1.5, ... 5
+const fmtSum = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+const fmtAvg = (sum, n) => (n ? (sum / n).toFixed(1) : '–')
 const HOURS_48 = 48 * 3600e3
 
 function useLive() {
@@ -213,7 +216,7 @@ function Admin() {
       onChange={(e) => setRating(r.player_name, Number(e.target.value))}
       className="rounded border border-stone-300 bg-white px-1 py-1">
       <option value="" disabled>דירוג</option>
-      {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+      {RATING_STEPS.map((n) => <option key={n} value={n}>{n}</option>)}
     </select>
   )
   const teamSelect = (r) => (
@@ -319,7 +322,7 @@ function Admin() {
             <div key={t} className="bg-white rounded-lg p-3">
               <div className="flex justify-between font-bold mb-1">
                 <span>{colors[t] ?? `קבוצה ${t + 1}`}</span>
-                <span className="font-normal text-sm">{teamRows(t).length} שחקנים · סכום {teamRows(t).reduce((s, r) => s + rOf(r), 0)}</span>
+                <span className="font-normal text-sm">{teamRows(t).length} שחקנים · סכום {fmtSum(teamRows(t).reduce((s, r) => s + rOf(r), 0))} · ממוצע {fmtAvg(teamRows(t).reduce((s, r) => s + rOf(r), 0), teamRows(t).length)}</span>
               </div>
               {teamRows(t).map((r) => (
                 <div key={r.id} className="flex justify-between items-center py-1"><span>{r.player_name} ({rOf(r)})</span>{teamSelect(r)}</div>

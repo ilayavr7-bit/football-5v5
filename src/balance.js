@@ -1,4 +1,5 @@
-// Splits 15 ratings into 3 teams of 5, minimising (strongest team total - weakest team total).
+// Splits 15 ratings (1-5, half-point steps allowed) into 3 teams of 5, minimising (strongest team total - weakest team total).
+// Ratings are doubled to integers internally so all sums are exact.
 // Exhaustive search (~4.5M pairs, well under a second). Ties are broken by evenness, then randomly.
 const N = 15
 const masks = []
@@ -11,8 +12,9 @@ for (let m = 0; m < 1 << N; m++) {
 export function balance(ratings) {
   if (ratings.length !== N) throw new Error('need exactly 15 players')
   const all = (1 << N) - 1
-  const total = ratings.reduce((a, b) => a + b, 0)
-  const sums = masks.map((m) => ratings.reduce((s, r, i) => s + ((m >> i) & 1 ? r : 0), 0))
+  const w = ratings.map((r) => Math.round(Number(r) * 2))
+  const total = w.reduce((a, b) => a + b, 0)
+  const sums = masks.map((m) => w.reduce((s, r, i) => s + ((m >> i) & 1 ? r : 0), 0))
   let best = Infinity, ties = 0, pick = null
   for (let i = 0; i < masks.length; i++) {
     for (let j = i + 1; j < masks.length; j++) {
