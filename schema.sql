@@ -17,8 +17,15 @@ insert into match_settings (id) values (1) on conflict do nothing;
 create table if not exists player_ratings (
   id uuid primary key default gen_random_uuid(),
   player_name text unique not null,
-  rating int default 3 check (rating >= 1 and rating <= 5)
+  rating numeric(3,1) default 3 check (rating >= 1 and rating <= 5 and rating * 2 = floor(rating * 2))
 );
+
+-- Migration for projects created with integer ratings (safe to re-run)
+alter table player_ratings alter column rating type numeric(3,1);
+alter table player_ratings alter column rating set default 3;
+alter table player_ratings drop constraint if exists player_ratings_rating_check;
+alter table player_ratings add constraint player_ratings_rating_check
+  check (rating >= 1 and rating <= 5 and rating * 2 = floor(rating * 2));
 
 create table if not exists registrations (
   id uuid primary key default gen_random_uuid(),
@@ -124,7 +131,8 @@ create or replace function admin_get_ratings(p_pin text) returns setof player_ra
 language plpgsql security definer set search_path = public as $$
 begin perform _assert_pin(p_pin); return query select * from player_ratings order by player_name; end $$;
 
-create or replace function admin_set_rating(p_pin text, p_name text, p_rating int) returns void
+drop function if exists admin_set_rating(text, text, int);
+create or replace function admin_set_rating(p_pin text, p_name text, p_rating numeric) returns void
 language plpgsql security definer set search_path = public as $$
 begin perform _assert_pin(p_pin);
   insert into player_ratings (player_name, rating) values (trim(p_name), p_rating)
