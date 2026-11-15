@@ -8,28 +8,47 @@ const fmtSum = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
 const fmtAvg = (sum, n) => (n ? (sum / n).toFixed(1) : '–')
 const HOURS_48 = 48 * 3600e3
 
+const ROLES = ['מאוזן', 'הגנה / שוער', 'קישור / פליימייקר', 'התקפה / סקורר', 'כושר / רץ']
+const STATS = [['pac', 'PAC'], ['sho', 'SHO'], ['pas', 'PAS'], ['dri', 'DRI'], ['def', 'DEF'], ['phy', 'PHY']]
+const DEFAULT_CARD = { rating: 3, role: 'מאוזן', height_cm: 175, pac: 70, sho: 70, pas: 70, dri: 70, def: 70, phy: 70 }
+const TIERS = {
+  bronze: { bg: 'linear-gradient(145deg,#e3b58a,#8a5a35)', fg: '#2a170a', border: '#6e4425' },
+  silver: { bg: 'linear-gradient(145deg,#f1f3f6,#9aa4b0)', fg: '#1c242c', border: '#6f7984' },
+  gold: { bg: 'linear-gradient(145deg,#f9e48e,#c79a2a)', fg: '#3a2a05', border: '#8f6d12' },
+}
+const AWARDS = [['top_scorer', '⚽', 'מלך שערים'], ['mvp_star', '⭐', 'כוכב המחזור'], ['best_duo', '✌️', 'צמד המחזור']]
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n) || lo)))
+const statAvg = (c) => STATS.reduce((s, [k]) => s + (Number(c[k]) || 40), 0) / 6
+const ovrOf = (c) => clamp(statAvg(c), 40, 99) // OVR shown on the card
+const tierOf = (ovr) => (ovr >= 75 ? 'gold' : ovr >= 65 ? 'silver' : 'bronze')
+const ratingFromStats = (c) => Math.min(5, Math.max(1, Math.round((1 + 4 * ((statAvg(c) - 40) / 59)) * 2) / 2)) // same formula as admin_set_player_card
+
 function useLive() {
   const [settings, setSettings] = useState(null)
   const [confirmed, setConfirmed] = useState([])
+  const [awards, setAwards] = useState(null)
   const load = useCallback(async () => {
     await supabase.rpc('expire_unpaid') // expiry check on every load
-    const [s, r] = await Promise.all([
+    const [s, r, a] = await Promise.all([
       supabase.from('match_settings').select('*').eq('id', 1).single(),
       supabase.from('registrations').select('*').eq('status', 'confirmed').order('approved_at'),
+      supabase.from('matchweek_awards').select('*').eq('id', 1).maybeSingle(), // row is only visible once published
     ])
     if (s.data) setSettings(s.data)
     if (r.data) setConfirmed(r.data)
+    setAwards(a.data || null)
   }, [])
   useEffect(() => {
     load()
     const ch = supabase.channel('live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'match_settings' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'registrations' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matchweek_awards' }, load)
       .subscribe()
     const poll = setInterval(load, 30000) // safety net for updates RLS hides from realtime
     return () => { supabase.removeChannel(ch); clearInterval(poll) }
   }, [load])
-  return { settings, confirmed, reload: load }
+  return { settings, confirmed, awards, reload: load }
 }
 
 function Countdown({ since }) {
@@ -85,7 +104,7 @@ function Teams({ colors, players }) {
 
 /* ---------- Public ---------- */
 function Player() {
-  const { settings, confirmed } = useLive()
+  const { settings, confirmed, awards } = useLive()
   const [name, setName] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -151,7 +170,87 @@ function Player() {
           ))}
         </ul>
       </section>
+
+      {awards?.awards_published && AWARDS.some(([k]) => awards[k]) && (
+        <section>
+          <h2 className="text-xl font-bold mb-2 text-center">נתוני מחזור 🔥</h2>
+          <div className="grid grid-cols-3 gap-2">
+            {AWARDS.map(([k, icon, label]) => (
+              <div key={k} className="bg-white rounded-xl shadow-sm border border-stone-200 p-2 text-center">
+                <div className="text-2xl">{icon}</div>
+                <div className="text-xs text-stone-500 mt-1">{label}</div>
+                <div className="font-bold text-sm mt-1 break-words">{awards[k] || '—'}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </Shell>
+  )
+}
+
+/* ---------- Admin: FC card builder (never rendered on the public page) ---------- */
+function FcCardModal({ name, initial, onSave, onClose }) {
+  const [c, setC] = useState({ ...DEFAULT_CARD, ...initial })
+  const [busy, setBusy] = useState(false)
+  const set = (k, v) => setC((x) => ({ ...x, [k]: v }))
+  const ovr = ovrOf(c)
+  const t = TIERS[tierOf(ovr)]
+  const input = 'w-16 rounded border border-stone-300 bg-white px-1 py-1 text-center'
+  const save = async () => {
+    setBusy(true)
+    const out = { ...c, height_cm: clamp(c.height_cm, 150, 210) }
+    STATS.forEach(([k]) => { out[k] = clamp(c[k], 40, 99) })
+    await onSave(out)
+    setBusy(false)
+  }
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="bg-chalk w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl p-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="mx-auto w-60 rounded-2xl p-4 text-center shadow-lg border-2" style={{ background: t.bg, color: t.fg, borderColor: t.border }}>
+          <div className="flex justify-between items-start">
+            <div className="text-right">
+              <div className="text-4xl font-extrabold leading-none">{ovr}</div>
+              <div className="text-xs font-bold">OVR</div>
+            </div>
+            <span className="text-xs font-bold rounded px-2 py-1" style={{ background: 'rgba(0,0,0,.15)' }}>{c.role}</span>
+          </div>
+          <div className="mt-3 text-xl font-extrabold truncate">{name}</div>
+          <div className="text-sm mb-2">{clamp(c.height_cm, 150, 210)} ס"מ</div>
+          <div className="grid grid-cols-3 gap-x-2 gap-y-1 border-t pt-2" style={{ borderColor: t.border }} dir="ltr">
+            {STATS.map(([k, label]) => (
+              <div key={k} className="flex gap-1 justify-center"><b>{clamp(c[k], 40, 99)}</b><span className="opacity-80 text-sm">{label}</span></div>
+            ))}
+          </div>
+        </div>
+        <p className="text-center text-sm text-stone-600">דירוג מחושב מהקלף: <b>{ratingFromStats(c)}</b> (נשמר בעת שמירת הקלף)</p>
+
+        {STATS.map(([k, label]) => (
+          <label key={k} className="flex items-center gap-2">
+            <span className="w-10 text-sm font-bold" dir="ltr">{label}</span>
+            <input type="range" min="40" max="99" value={clamp(c[k], 40, 99)} onChange={(e) => set(k, Number(e.target.value))} className="flex-1" />
+            <input type="number" min="40" max="99" value={c[k]} className={input}
+              onChange={(e) => set(k, e.target.value === '' ? '' : Number(e.target.value))} onBlur={() => set(k, clamp(c[k], 40, 99))} />
+          </label>
+        ))}
+        <label className="flex items-center gap-2">
+          <span className="w-10 text-sm font-bold">גובה</span>
+          <input type="range" min="150" max="210" value={clamp(c.height_cm, 150, 210)} onChange={(e) => set('height_cm', Number(e.target.value))} className="flex-1" />
+          <input type="number" min="150" max="210" value={c.height_cm} className={input}
+            onChange={(e) => set('height_cm', e.target.value === '' ? '' : Number(e.target.value))} onBlur={() => set('height_cm', clamp(c.height_cm, 150, 210))} />
+        </label>
+        <label className="flex items-center gap-2">
+          <span className="w-10 text-sm font-bold">תפקיד</span>
+          <select value={c.role} onChange={(e) => set('role', e.target.value)} className="flex-1 rounded border border-stone-300 bg-white px-2 py-2">
+            {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </label>
+        <div className="flex gap-2">
+          <button disabled={busy} onClick={save} className={`${btn} flex-1 bg-pitch text-chalk`}>שמור קלף</button>
+          <button onClick={onClose} className={`${btn} bg-stone-200`}>סגור</button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -163,14 +262,25 @@ function Admin() {
   const { settings, reload } = useLive()
   const [rows, setRows] = useState([])
   const [draft, setDraft] = useState(null)
-  const [ratings, setRatings] = useState({})
+  const [ratings, setRatings] = useState({}) // player_name -> { rating, role, height_cm, pac, ... }
+  const [cardFor, setCardFor] = useState(null)
+  const [awardsDraft, setAwardsDraft] = useState(null)
+  const [awardsSaved, setAwardsSaved] = useState(null)
   const [next, setNext] = useState(null)
   const tried = useRef(false)
 
   const refresh = useCallback(async (p = pin) => {
-    const [r, rt] = await Promise.all([rpc('admin_list_registrations', { p_pin: p }), rpc('admin_get_ratings', { p_pin: p })])
+    const [r, rt, aw] = await Promise.all([
+      rpc('admin_list_registrations', { p_pin: p }),
+      rpc('admin_get_ratings', { p_pin: p }),
+      rpc('admin_get_awards', { p_pin: p }).catch(() => null), // tolerate DB not migrated yet
+    ])
     setRows(r)
-    setRatings(Object.fromEntries(rt.map((x) => [x.player_name, x.rating])))
+    setRatings(Object.fromEntries(rt.map((x) => [x.player_name, x])))
+    if (aw?.[0]) {
+      setAwardsSaved(aw[0])
+      setAwardsDraft((d) => d ?? { top_scorer: aw[0].top_scorer || '', mvp_star: aw[0].mvp_star || '', best_duo: aw[0].best_duo || '' })
+    }
   }, [pin])
 
   const login = async (e) => {
@@ -192,12 +302,17 @@ function Admin() {
   // Teams: drafts are admin-only until published
   const confirmedRows = rows.filter((r) => r.status === 'confirmed')
   const colors = settings?.team_colors || []
-  const rOf = (r) => ratings[r.player_name] ?? 3 // unrated players count as 3
+  const cardOf = (r) => ({ ...DEFAULT_CARD, ...ratings[r.player_name] })
+  const rOf = (r) => Number(ratings[r.player_name]?.rating ?? 3) // unrated players count as 3
+  const teamInfo = (t) => {
+    const rs = teamRows(t), n = rs.length, sum = (f) => rs.reduce((a, r) => a + f(r), 0)
+    return `${n} שחקנים · דירוג ${fmtAvg(sum(rOf), n)} · OVR ${fmtAvg(sum((r) => ovrOf(cardOf(r))), n)} · גובה ${fmtAvg(sum((r) => Number(cardOf(r).height_cm)), n)} ס"מ`
+  }
   const teamRows = (t) => confirmedRows.filter((r) => r.draft_team === t)
   const readyToPublish = confirmedRows.length === CAP && [0, 1, 2].every((t) => teamRows(t).length === 5)
 
   const runBalance = async () => {
-    const teams = balance(confirmedRows.map(rOf))
+    const teams = balance(confirmedRows.map((r) => ({ ...cardOf(r), rating: rOf(r) })))
     const assignments = teams.flatMap((idxs, t) => idxs.map((i) => ({ id: confirmedRows[i].id, team_index: t })))
     await act('admin_apply_teams', { p_assignments: assignments })()
   }
@@ -207,18 +322,48 @@ function Admin() {
   }, [rows, ratings]) // eslint-disable-line
 
   const setRating = async (name, v) => {
-    setRatings((m) => ({ ...m, [name]: v }))
+    setRatings((m) => ({ ...m, [name]: { ...DEFAULT_CARD, ...m[name], player_name: name, rating: v } }))
     try { await rpc('admin_set_rating', { p_pin: pin, p_name: name, p_rating: v }) }
     catch { alert('שמירת הדירוג נכשלה'); refresh() }
   }
   const rate = (r) => (
-    <select aria-label={`דירוג ${r.player_name}`} value={ratings[r.player_name] ?? ''}
+    <select aria-label={`דירוג ${r.player_name}`} value={ratings[r.player_name]?.rating ?? ''}
       onChange={(e) => setRating(r.player_name, Number(e.target.value))}
       className="rounded border border-stone-300 bg-white px-1 py-1">
       <option value="" disabled>דירוג</option>
       {RATING_STEPS.map((n) => <option key={n} value={n}>{n}</option>)}
     </select>
   )
+  const smBtn = 'rounded-lg px-2 py-1 text-sm'
+  const setRole = async (name, role) => {
+    setRatings((m) => ({ ...m, [name]: { ...DEFAULT_CARD, ...m[name], player_name: name, role } }))
+    try { await rpc('admin_set_role', { p_pin: pin, p_name: name, p_role: role }) }
+    catch { alert('שמירת התפקיד נכשלה'); refresh() }
+  }
+  const roleSel = (r) => (
+    <select aria-label={`תפקיד ${r.player_name}`} value={cardOf(r).role} onChange={(e) => setRole(r.player_name, e.target.value)}
+      className="rounded border border-stone-300 bg-white px-1 py-1 max-w-32">
+      {ROLES.map((x) => <option key={x} value={x}>{x}</option>)}
+    </select>
+  )
+  const saveCard = async (name, c) => {
+    try {
+      await rpc('admin_set_player_card', {
+        p_pin: pin, p_name: name, p_role: c.role, p_height_cm: c.height_cm,
+        p_pac: c.pac, p_sho: c.sho, p_pas: c.pas, p_dri: c.dri, p_def: c.def, p_phy: c.phy,
+      })
+      await refresh()
+      setCardFor(null)
+    } catch { alert('שמירת הקלף נכשלה') }
+  }
+  const bulk = (message, fn, args) => () => confirm(message) && act(fn, args)()
+  const saveAwards = (publish) => async () => {
+    if (publish && !AWARDS.some(([k]) => awardsDraft[k].trim())) return alert('יש למלא לפחות נתון אחד')
+    if (!publish && !confirm('למחוק ולהסתיר את נתוני המחזור?')) return
+    const d = publish ? awardsDraft : { top_scorer: '', mvp_star: '', best_duo: '' }
+    await act('admin_save_awards', { p_top_scorer: d.top_scorer, p_mvp_star: d.mvp_star, p_best_duo: d.best_duo, p_published: publish })()
+    if (!publish) setAwardsDraft(d)
+  }
   const teamSelect = (r) => (
     <select aria-label={`קבוצה של ${r.player_name}`} value={r.draft_team ?? ''}
       onChange={(e) => act('admin_set_team', { p_id: r.id, p_team: e.target.value === '' ? null : Number(e.target.value) })()}
@@ -227,11 +372,20 @@ function Admin() {
       {[0, 1, 2].map((t) => <option key={t} value={t}>{colors[t] ?? `קבוצה ${t + 1}`}</option>)}
     </select>
   )
+  const playerLine = (r) => (
+    <div key={r.id} className="flex justify-between items-center py-1 gap-2">
+      <span className="flex items-center gap-1 flex-wrap">
+        {r.player_name} <span className="text-stone-500">({rOf(r)})</span>
+        <span className="text-xs rounded bg-stone-100 text-stone-600 px-1.5 py-0.5">{cardOf(r).role}</span>
+      </span>
+      {teamSelect(r)}
+    </div>
+  )
   const doReset = async (e) => {
     e.preventDefault()
-    if (!confirm('לאפס את המשחק? כל ההרשמות יימחקו והקבוצות יוסרו. הדירוגים יישמרו.')) return
+    if (!confirm('לאפס את המשחק? ההרשמות, הקבוצות ונתוני המחזור יימחקו. הדירוגים, התפקידים והקלפים יישמרו.')) return
     await act('admin_reset_match', { p_match_time: next.match_time, p_price: Number(next.price), p_bit_link: next.bit_link })()
-    setDraft(null)
+    setDraft(null); setAwardsDraft(null); await refresh()
   }
 
   const act = (fn, args) => async () => {
@@ -261,14 +415,17 @@ function Admin() {
   )
 
   const by = (s) => rows.filter((r) => r.status === s)
-  const List = ({ title, items, children }) => (
+  const List = ({ title, items, children, actions }) => (
     <section>
-      <h2 className="text-xl font-bold mb-2">{title} ({items.length})</h2>
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+        <h2 className="text-xl font-bold">{title} ({items.length})</h2>
+        {actions && <div className="flex gap-2">{actions}</div>}
+      </div>
       {items.length === 0 && <p className="text-stone-500">אין שחקנים ברשימה.</p>}
       <ul className="divide-y divide-stone-200 bg-white rounded-lg">
         {items.map((r) => (
           <li key={r.id} className="px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-            <span>{r.player_name}</span><div className="flex gap-2 items-center">{children(r)}</div>
+            <span>{r.player_name}</span><div className="flex gap-2 items-center flex-wrap">{children(r)}</div>
           </li>
         ))}
       </ul>
@@ -279,14 +436,26 @@ function Admin() {
 
   return (
     <Shell title="ניהול משחק">
-      <List title="ממתינים לאישור" items={by('pending')}>
+      <List title="ממתינים לאישור" items={by('pending')}
+        actions={by('pending').length > 0 && (
+          <button className={`${btn} bg-pitch text-chalk`}
+            onClick={bulk('לאשר את כל הממתינים? מעבר ל-15 מגיעים יועברו לרשימת מזמינים.', 'admin_approve_all', {})}>אשר הכל</button>
+        )}>
         {(r) => <>
           {rate(r)}<button className={`${btn} bg-pitch text-chalk`} onClick={act('admin_approve', { p_id: r.id })}>אשר</button>{remove(r)}
         </>}
       </List>
-      <List title="מגיעים" items={by('confirmed')}>
+      <List title="מגיעים" items={by('confirmed')}
+        actions={by('confirmed').length > 0 && <>
+          <button className={`${smBtn} bg-green-50 text-green-800 border border-green-300`}
+            onClick={bulk('לסמן את כל המגיעים כשילמו?', 'admin_set_all_paid', { p_is_paid: true })}>סמן לכולם שולם</button>
+          <button className={`${smBtn} bg-red-50 text-red-800 border border-red-300`}
+            onClick={bulk('לסמן את כל המגיעים כלא שילמו?', 'admin_set_all_paid', { p_is_paid: false })}>סמן לכולם לא שולם</button>
+        </>}>
         {(r) => <>
           {rate(r)}
+          {roleSel(r)}
+          <button className={`${smBtn} bg-stone-800 text-white`} onClick={() => setCardFor(r.player_name)}>קלף FC</button>
           <select aria-label={`סטטוס תשלום ${r.player_name}`} value={r.is_paid ? 'true' : 'false'}
             onChange={(e) => act('admin_set_paid', { p_id: r.id, p_paid: e.target.value === 'true' })()}
             className={`rounded border px-1 py-1 ${r.is_paid ? 'bg-green-50 text-green-800 border-green-300' : 'bg-red-50 text-red-800 border-red-300'}`}>
@@ -322,10 +491,10 @@ function Admin() {
             <div key={t} className="bg-white rounded-lg p-3">
               <div className="flex justify-between font-bold mb-1">
                 <span>{colors[t] ?? `קבוצה ${t + 1}`}</span>
-                <span className="font-normal text-sm">{teamRows(t).length} שחקנים · סכום {fmtSum(teamRows(t).reduce((s, r) => s + rOf(r), 0))} · ממוצע {fmtAvg(teamRows(t).reduce((s, r) => s + rOf(r), 0), teamRows(t).length)}</span>
+                <span className="font-normal text-xs text-stone-600">{teamInfo(t)}</span>
               </div>
               {teamRows(t).map((r) => (
-                <div key={r.id} className="flex justify-between items-center py-1"><span>{r.player_name} ({rOf(r)})</span>{teamSelect(r)}</div>
+                playerLine(r)
               ))}
             </div>
           ))}
@@ -333,10 +502,27 @@ function Admin() {
             <div className="bg-white rounded-lg p-3">
               <div className="font-bold mb-1">ללא קבוצה</div>
               {confirmedRows.filter((r) => r.draft_team == null).map((r) => (
-                <div key={r.id} className="flex justify-between items-center py-1"><span>{r.player_name} ({rOf(r)})</span>{teamSelect(r)}</div>
+                playerLine(r)
               ))}
             </div>
           )}
+        </section>
+      )}
+
+      {awardsDraft && (
+        <section className="space-y-3">
+          <h2 className="text-xl font-bold">נתוני מחזור</h2>
+          {AWARDS.map(([k, icon, label]) => (
+            <label key={k} className="block"><span className="text-sm">{icon} {label}</span>
+              <input className={field} list="players-dl" value={awardsDraft[k]} onChange={(e) => setAwardsDraft({ ...awardsDraft, [k]: e.target.value })} />
+            </label>
+          ))}
+          <datalist id="players-dl">{confirmedRows.map((r) => <option key={r.id} value={r.player_name} />)}</datalist>
+          <div className="flex gap-2 flex-wrap">
+            <button className={`${btn} bg-pitch text-chalk`} onClick={saveAwards(true)}>פרסם נתוני מחזור</button>
+            <button className={`${btn} bg-stone-200`} onClick={saveAwards(false)}>מחק / הסתר נתוני מחזור</button>
+          </div>
+          {awardsSaved?.awards_published && <p className="text-sm text-green-700">הנתונים מפורסמים בעמוד הראשי.</p>}
         </section>
       )}
 
@@ -355,7 +541,7 @@ function Admin() {
       {next && (
         <form onSubmit={doReset} className="space-y-3 border-t border-stone-300 pt-5">
           <h2 className="text-xl font-bold">איפוס משחק לשבוע הבא</h2>
-          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ומבטל פרסום קבוצות. הדירוגים נשמרים.</p>
+          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ונתוני המחזור ומבטל פרסום קבוצות. הדירוגים, התפקידים והקלפים נשמרים.</p>
           {[['match_time', 'תאריך וזמן המשחק הבא'], ['price', 'מחיר (₪)'], ['bit_link', 'קישור Bit']].map(([k, label]) => (
             <label key={k} className="block"><span className="text-sm">{label}</span>
               <input className={field} value={next[k]} type={k === 'price' ? 'number' : 'text'}
@@ -364,6 +550,10 @@ function Admin() {
           ))}
           <button className={`${btn} w-full bg-red-700 text-white`}>איפוס משחק לשבוע הבא</button>
         </form>
+      )}
+      {cardFor && (
+        <FcCardModal key={cardFor} name={cardFor} initial={ratings[cardFor]}
+          onSave={(c) => saveCard(cardFor, c)} onClose={() => setCardFor(null)} />
       )}
     </Shell>
   )
