@@ -17,116 +17,21 @@ const ROLE_POS = {
 }
 const STATS = [['pac', 'PAC'], ['sho', 'SHO'], ['pas', 'PAS'], ['dri', 'DRI'], ['def', 'DEF'], ['phy', 'PHY']]
 const PLAYSTYLES = [
-  ['Power Shot', 'בעיטה חזקה (Power Shot)'],
-  ['Finesse Shot', 'בעיטה מסובבת (Finesse Shot)'],
-  ['Quick Step', 'צעד ראשון מהיר (Quick Step)'],
-  ['Rapid', 'ספרינטר (Rapid)'],
-  ['Incisive Pass', 'מסירת עומק (Incisive Pass)'],
-  ['Tiki Taka', 'טיקי טאקה (Tiki Taka)'],
-  ['Technical', 'טכניקה ודריבל (Technical)'],
-  ['First Touch', 'עצירה ראשונה (First Touch)'],
-  ['Anticipate', 'חטיפה וקריאת משחק (Anticipate)'],
-  ['Bruiser', 'פיזיות וכתף (Bruiser)'],
-  ['Relentless', 'כושר בלתי נגמר (Relentless)'],
-  ['GK Reflexes', 'רפלקסים בשער (GK Reflexes)'],
+  ['Power Shot', '⚽', 'בעיטה חזקה (Power Shot+)'],
+  ['Finesse Shot', '🎯', 'בעיטה מסובבת (Finesse Shot+)'],
+  ['Quick Step', '🚀', 'צעד ראשון מהיר (Quick Step+)'],
+  ['Rapid', '💨', 'ספרינטר (Rapid+)'],
+  ['Incisive Pass', '📐', 'מסירת עומק (Incisive Pass+)'],
+  ['Tiki Taka', '🔄', 'טיקי טאקה (Tiki Taka+)'],
+  ['Technical', '🪄', 'טכניקה ודריבל (Technical+)'],
+  ['First Touch', '🧲', 'עצירה ראשונה (First Touch+)'],
+  ['Anticipate', '🛡️', 'חטיפה וקריאת משחק (Anticipate+)'],
+  ['Bruiser', '💪', 'פיזיות וכתף (Bruiser+)'],
+  ['Relentless', '🔋', 'כושר בלתי נגמר (Relentless+)'],
+  ['GK Reflexes', '🧤', 'רפלקסים בשער (GK Reflexes+)'],
 ]
-const psLabel = (key) => PLAYSTYLES.find(([k]) => k === key)?.[1] || key
-
-/* Monochrome EA FC style vector icons inside the PlayStyle+ diamond */
-function PlayStyleSvg({ name, className = 'w-4 h-4' }) {
-  const props = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round', className }
-  switch (name) {
-    case 'Power Shot':
-      return (
-        <svg {...props}>
-          <circle cx="14" cy="12" r="6" />
-          <path d="M14 9l2 2-1 3h-2l-1-3 2-2z" />
-          <path d="M2 8h5M1 12h6M2 16h5" />
-        </svg>
-      )
-    case 'Finesse Shot':
-      return (
-        <svg {...props}>
-          <circle cx="12" cy="12" r="7" />
-          <circle cx="12" cy="12" r="2.5" />
-          <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-        </svg>
-      )
-    case 'Quick Step':
-      return (
-        <svg {...props}>
-          <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />
-        </svg>
-      )
-    case 'Rapid':
-      return (
-        <svg {...props}>
-          <path d="M4 9h11a3 3 0 1 0-3-3M2 13h15a3 3 0 1 1-3 3M5 17h7" />
-        </svg>
-      )
-    case 'Incisive Pass':
-      return (
-        <svg {...props}>
-          <path d="M4 20L19 5M19 5h-7M19 5v7" />
-          <circle cx="6" cy="18" r="2" />
-        </svg>
-      )
-    case 'Tiki Taka':
-      return (
-        <svg {...props}>
-          <polygon points="12 4 4 19 20 19" />
-          <circle cx="12" cy="4" r="1.5" fill="currentColor" />
-          <circle cx="4" cy="19" r="1.5" fill="currentColor" />
-          <circle cx="20" cy="19" r="1.5" fill="currentColor" />
-        </svg>
-      )
-    case 'Technical':
-      return (
-        <svg {...props}>
-          <circle cx="12" cy="7" r="4" />
-          <path d="M5 20c2-4 5-4 7 0s5 4 7 0" />
-        </svg>
-      )
-    case 'First Touch':
-      return (
-        <svg {...props}>
-          <path d="M6 4v7a6 6 0 0 0 12 0V4" />
-          <path d="M6 8h4M14 8h4" />
-        </svg>
-      )
-    case 'Anticipate':
-      return (
-        <svg {...props}>
-          <path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" />
-          <path d="M9 12l2 2 4-4" />
-        </svg>
-      )
-    case 'Bruiser':
-      return (
-        <svg {...props}>
-          <path d="M6 12h12M3 9v6M6 7v10M18 7v10M21 9v6" />
-        </svg>
-      )
-    case 'Relentless':
-      return (
-        <svg {...props}>
-          <path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" />
-        </svg>
-      )
-    case 'GK Reflexes':
-      return (
-        <svg {...props}>
-          <path d="M7 19v-6a2 2 0 0 1 4 0v-2a2 2 0 0 1 4 0v1a2 2 0 0 1 4 0v5a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-3z" />
-        </svg>
-      )
-    default:
-      return (
-        <svg {...props}>
-          <circle cx="12" cy="12" r="6" />
-        </svg>
-      )
-  }
-}
+const psIcon = (key) => PLAYSTYLES.find(([k]) => k === key)?.[1] || '⚽'
+const psLabel = (key) => PLAYSTYLES.find(([k]) => k === key)?.[2] || key
 
 const DEFAULT_CARD = {
   rating: 3, role: 'מאוזן', height_cm: 175,
@@ -269,6 +174,27 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
   const sm = clamp(c.skill_moves ?? 3, 1, 5)
   const wf = clamp(c.weak_foot ?? 3, 1, 5)
 
+  // Interactive PlayStyle+ banner state (shows on tap/click, auto-hides after 3 seconds)
+  const [showPsBanner, setShowPsBanner] = useState(false)
+  const psTimerRef = useRef(null)
+
+  const togglePsBanner = (e) => {
+    e.stopPropagation()
+    if (psTimerRef.current) clearTimeout(psTimerRef.current)
+    setShowPsBanner((prev) => {
+      const nextState = !prev
+      if (nextState) {
+        psTimerRef.current = setTimeout(() => setShowPsBanner(false), 3000)
+      }
+      return nextState
+    })
+  }
+
+  useEffect(() => {
+    setShowPsBanner(false)
+    return () => { if (psTimerRef.current) clearTimeout(psTimerRef.current) }
+  }, [c.playstyle_plus])
+
   return (
     <div className={`relative mx-auto select-none ${compact ? 'w-full max-w-[184px] py-2' : 'w-64 py-3'}`}>
       {/* Main Shield Card Container */}
@@ -300,42 +226,65 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           </div>
         )}
 
-        {/* Authentic EA FC PlayStyle+ Badge protruding from the left border */}
+        {/* Authentic EA FC PlayStyle+ Badge protruding from the left border (Clickable) */}
         {c.playstyle_plus && (
-          <div
-            title={`PlayStyle+: ${psLabel(c.playstyle_plus)}`}
-            className={`
-              absolute z-30 flex items-center justify-center rotate-45 rounded-[5px] shadow-lg
-              ${compact ? '-left-2.5 top-[44%] w-7 h-7' : '-left-3.5 top-[45%] w-9 h-9'}
-            `}
-            style={{
-              background: t.psBg,
-              border: `2px solid ${t.psBorder}`,
-              boxShadow: '0 3px 8px rgba(0,0,0,0.35)',
-              color: t.fg,
-            }}
-          >
-            <div
-              className="w-[82%] h-[82%] rounded-[3px] flex items-center justify-center"
-              style={{ border: `1px solid ${t.psBorder}` }}
+          <>
+            <button
+              type="button"
+              onClick={togglePsBanner}
+              title="לחץ להצגת שם ה-PlayStyle+"
+              className={`
+                absolute z-30 flex items-center justify-center rotate-45 rounded-[6px] shadow-lg cursor-pointer
+                transition-transform active:scale-95
+                ${compact ? '-left-2.5 top-[44%] w-7 h-7' : '-left-3.5 top-[45%] w-10 h-10'}
+              `}
+              style={{
+                background: t.psBg,
+                border: `2px solid ${t.psBorder}`,
+                boxShadow: '0 4px 10px rgba(0,0,0,0.38)',
+                color: t.fg,
+              }}
             >
-              <div className="-rotate-45 flex items-center justify-center">
-                <PlayStyleSvg name={c.playstyle_plus} className={compact ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
+              <div
+                className="w-[82%] h-[82%] rounded-[3px] flex items-center justify-center"
+                style={{ border: `1px solid ${t.psBorder}` }}
+              >
+                <span className={`-rotate-45 leading-none ${compact ? 'text-xs' : 'text-base'}`}>
+                  {psIcon(c.playstyle_plus)}
+                </span>
               </div>
-            </div>
-            {/* Plus sign on top corner of the diamond */}
-            <span
-              className="-rotate-45 absolute -top-1 -right-1 text-[9px] font-black leading-none px-0.5 rounded-sm"
-              style={{ background: t.psBorder, color: variant === 'totw' || variant === 'potm' ? '#111' : '#fff7cc' }}
-            >
-              +
-            </span>
-          </div>
+              {/* Plus sign on the right corner of the diamond */}
+              <span
+                className="-rotate-45 absolute -top-1 -right-1 text-[9px] font-black leading-none px-0.5 rounded-sm"
+                style={{ background: t.psBorder, color: variant === 'totw' || variant === 'potm' ? '#111' : '#fff7cc' }}
+              >
+                +
+              </span>
+            </button>
+
+            {/* Semi-transparent floating banner showing full PlayStyle+ name when tapped */}
+            {showPsBanner && (
+              <div
+                dir="rtl"
+                onClick={togglePsBanner}
+                className={`
+                  absolute z-40 left-3 right-3 top-[38%] mx-auto w-fit max-w-[92%]
+                  rounded-xl px-3 py-1.5 text-center shadow-2xl cursor-pointer
+                  backdrop-blur-md border border-amber-300/70
+                  ${compact ? 'text-[11px]' : 'text-xs'} font-extrabold text-amber-100
+                `}
+                style={{ background: 'rgba(15, 15, 15, 0.84)' }}
+              >
+                <span className="ml-1">{psIcon(c.playstyle_plus)}</span>
+                <span>{psLabel(c.playstyle_plus)}</span>
+              </div>
+            )}
+          </>
         )}
 
         {/* Upper Area: Left OVR + Position + ++ | Center/Right Player Portrait */}
         <div className={`relative z-10 flex items-start justify-between ${compact ? 'h-24' : 'h-36'}`}>
-          {/* Top-Left OVR & Position stack (Valverde layout) */}
+          {/* Top-Left OVR & Position stack */}
           <div className="flex flex-col items-center text-center leading-none pt-0.5 pl-0.5 z-20">
             <div className={`${compact ? 'text-2xl' : 'text-4xl'} font-black tracking-tight`}>{ovr}</div>
             <div className={`${compact ? 'text-xs' : 'text-sm'} font-extrabold tracking-wide mt-0.5`}>{posCode}</div>
@@ -378,7 +327,7 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           </div>
         </div>
 
-        {/* 6 Stats in a Single Horizontal Row (PAC SHO PAS DRI DEF PHY) exactly like EA FC */}
+        {/* 6 Stats in a Single Horizontal Row (PAC SHO PAS DRI DEF PHY) */}
         <div
           className="relative z-10 grid grid-cols-6 gap-0.5 border-t pt-1.5 mt-1 text-center"
           style={{ borderColor: t.line }}
@@ -418,10 +367,7 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           {sm}<span>★</span>
         </span>
         <span className="px-1.5 flex items-center gap-0.5" title="Weak Foot (רגל חלשה)">
-          {wf}
-          <svg viewBox="0 0 24 24" className="w-3 h-3 inline" fill="currentColor">
-            <path d="M7 3c-1.5 0-3 1.2-3 3.5 0 3.2 2.2 6.5 2.5 9.5.2 2 1.5 5 4.5 5 2.2 0 3.5-1.5 3.5-3.5 0-2-1.5-3.5-2.5-5.5-1-2-1.5-4.5-1.5-6.5C10.5 4 9 3 7 3z" />
-          </svg>
+          {wf}<span className="text-[11px] leading-none">🦶</span>
         </span>
         <span className="px-1.5" title="גובה">
           {clamp(c.height_cm, 150, 210)}cm
@@ -504,6 +450,7 @@ function Player() {
       {awards?.awards_published && AWARDS.some(([k]) => awards[k]) && (
         <section className="space-y-3">
           <h2 className="text-xl font-bold text-center">נתוני מחזור 🔥</h2>
+          <p className="text-xs text-stone-500 text-center">לחצו על יהלום ה-PlayStyle+ שעל הקלף כדי לראות את היכולת המיוחדת</p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {AWARDS.map(([k, icon, label]) => {
               const pName = awards[k]
@@ -753,15 +700,15 @@ function FcCardModal({ name, initial, onSave, onClose }) {
           </div>
 
           <label className="block pt-1 border-t border-stone-100">
-            <span className="text-sm font-bold text-amber-800">◆ PlayStyle+ (יהלום זהב על דופן הקלף)</span>
+            <span className="text-sm font-bold text-amber-800">◆ PlayStyle+ (לחיצה על היהלום בקלף מציגה את השם)</span>
             <select
               value={c.playstyle_plus || ''}
               onChange={(e) => set('playstyle_plus', e.target.value)}
               className="mt-1 w-full rounded border border-stone-300 bg-white px-2 py-2 text-sm font-medium"
             >
               <option value="">ללא PlayStyle+</option>
-              {PLAYSTYLES.map(([k, label]) => (
-                <option key={k} value={k}>{label}</option>
+              {PLAYSTYLES.map(([k, ico, label]) => (
+                <option key={k} value={k}>{ico} {label}</option>
               ))}
             </select>
           </label>
@@ -1119,7 +1066,7 @@ function Admin() {
       {next && (
         <form onSubmit={doReset} className="space-y-3 border-t border-stone-300 pt-5">
           <h2 className="text-xl font-bold">איפוס משחק לשבוע הבא</h2>
-          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ונתוני המחזור ומבטל פרסום קבוצות. הדירוגים, התפקידים, הקלפים ושחקן החודש נשמרים.</p>
+          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ונתוני המחזור ומבטל פרסום קבוצות. הדירוגים, התפקידים, הקלפים ושחקן החודש יישמרו.</p>
           {[['match_time', 'תאריך וזמן המשחק הבא'], ['price', 'מחיר (₪)'], ['bit_link', 'קישור Bit']].map(([k, label]) => (
             <label key={k} className="block"><span className="text-sm">{label}</span>
               <input className={field} value={next[k]} type={k === 'price' ? 'number' : 'text'}
