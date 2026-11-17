@@ -398,7 +398,7 @@ function Player() {
         fetch(`https://ntfy.sh/${ encodeURIComponent(settings.ntfy_topic.trim()) }`, {
           method: 'POST',
           body: `⚽ בקשת הרשמה חדשה מ-${cleanName} ממתינה לאישור ב-/admin`,
-          headers: { Title: 'כדורגל וייסגל - הרשמה חדשה' },
+          headers: { Title: 'Weisgal Football - New Registration' },
         }).catch(() => {})
       }
       setName('')
@@ -1017,7 +1017,7 @@ function Admin() {
     await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
       method: 'POST',
       body: 'בדיקת התראה! אם אתה רואה את זה באייפון, תקבל התראה בכל הרשמה חדשה ⚽',
-      headers: { Title: 'כדורגל וייסגל - בדיקה' },
+      headers: { Title: 'Weisgal Football - Test' },
     })
     alert('נשלחה התראת בדיקה לערוץ שלך ב-ntfy!')
   }
