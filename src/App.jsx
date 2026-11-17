@@ -6,6 +6,17 @@ const CAP = 15
 const RATING_STEPS = Array.from({ length: 9 }, (_, i) => 1 + i / 2) // 1, 1.5, ... 5
 const fmtAvg = (sum, n) => (n ? (sum / n).toFixed(1) : '–')
 const HOURS_48 = 48 * 3600e3
+const MY_REGS_KEY = 'weisgal_my_reg_ids'
+
+const getMyRegIds = () => {
+  try { return JSON.parse(localStorage.getItem(MY_REGS_KEY) || '[]') } catch { return [] }
+}
+const saveMyRegId = (id) => {
+  try {
+    const cur = getMyRegIds()
+    if (id && !cur.includes(id)) localStorage.setItem(MY_REGS_KEY, JSON.stringify([...cur, id]))
+  } catch { /* ignore */ }
+}
 
 const ROLES = ['מאוזן', 'הגנה / שוער', 'קישור / פליימייקר', 'התקפה / סקורר', 'כושר / רץ']
 const ROLE_POS = {
@@ -69,9 +80,9 @@ const TIERS = {
 }
 
 const AWARDS = [
-  ['top_scorer', '⚽', 'מלך שערים'],
-  ['mvp_star', '⭐', 'כוכב המחזור'],
-  ['best_duo', '🥅', 'שער המחזור'],
+  ['top_scorer', 'top_scorer_2', '⚽', 'מלך שערים'],
+  ['mvp_star', 'mvp_star_2', '⭐', 'כוכב המחזור'],
+  ['best_duo', 'best_duo_2', '🥅', 'שער המחזור'],
 ]
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n) || lo)))
@@ -174,7 +185,6 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
   const sm = clamp(c.skill_moves ?? 3, 1, 5)
   const wf = clamp(c.weak_foot ?? 3, 1, 5)
 
-  // Interactive PlayStyle+ banner state (shows on tap/click, auto-hides after 3 seconds)
   const [showPsBanner, setShowPsBanner] = useState(false)
   const psTimerRef = useRef(null)
 
@@ -196,8 +206,7 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
   }, [c.playstyle_plus])
 
   return (
-    <div className={`relative mx-auto select-none ${compact ? 'w-full max-w-[184px] py-2' : 'w-64 py-3'}`}>
-      {/* Main Shield Card Container */}
+    <div className={`relative mx-auto select-none ${compact ? 'w-full max-w-[180px] py-2' : 'w-64 py-3'}`}>
       <div
         dir="ltr"
         className={`relative rounded-t-[28px] rounded-b-[22px] border-2 shadow-xl ${compact ? 'px-2.5 pt-2.5 pb-3' : 'px-4 pt-3.5 pb-4'}`}
@@ -208,7 +217,6 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           boxShadow: '0 10px 25px -5px rgba(0,0,0,0.35), inset 0 1px 2px rgba(255,255,255,0.45)',
         }}
       >
-        {/* Subtle diagonal metallic sheen lines like authentic FUT cards */}
         <div
           className="absolute inset-0 pointer-events-none rounded-t-[26px] rounded-b-[20px] opacity-25"
           style={{
@@ -216,7 +224,6 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           }}
         />
 
-        {/* Top TOTW / POTM Header Pill */}
         {t.badge && (
           <div
             className="relative z-10 text-[9px] font-black tracking-widest uppercase text-center rounded-full px-2.5 py-0.5 mb-1 mx-auto w-fit"
@@ -226,7 +233,6 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           </div>
         )}
 
-        {/* Authentic EA FC PlayStyle+ Badge protruding from the left border (Clickable) */}
         {c.playstyle_plus && (
           <>
             <button
@@ -253,7 +259,6 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
                   {psIcon(c.playstyle_plus)}
                 </span>
               </div>
-              {/* Plus sign on the right corner of the diamond */}
               <span
                 className="-rotate-45 absolute -top-1 -right-1 text-[9px] font-black leading-none px-0.5 rounded-sm"
                 style={{ background: t.psBorder, color: variant === 'totw' || variant === 'potm' ? '#111' : '#fff7cc' }}
@@ -262,18 +267,17 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
               </span>
             </button>
 
-            {/* Semi-transparent floating banner showing full PlayStyle+ name when tapped */}
             {showPsBanner && (
               <div
                 dir="rtl"
                 onClick={togglePsBanner}
                 className={`
-                  absolute z-40 left-3 right-3 top-[38%] mx-auto w-fit max-w-[92%]
+                  absolute z-40 left-2 right-2 top-[36%] mx-auto w-fit max-w-[94%]
                   rounded-xl px-3 py-1.5 text-center shadow-2xl cursor-pointer
                   backdrop-blur-md border border-amber-300/70
                   ${compact ? 'text-[11px]' : 'text-xs'} font-extrabold text-amber-100
                 `}
-                style={{ background: 'rgba(15, 15, 15, 0.84)' }}
+                style={{ background: 'rgba(15, 15, 15, 0.86)' }}
               >
                 <span className="ml-1">{psIcon(c.playstyle_plus)}</span>
                 <span>{psLabel(c.playstyle_plus)}</span>
@@ -282,16 +286,13 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           </>
         )}
 
-        {/* Upper Area: Left OVR + Position + ++ | Center/Right Player Portrait */}
         <div className={`relative z-10 flex items-start justify-between ${compact ? 'h-24' : 'h-36'}`}>
-          {/* Top-Left OVR & Position stack */}
           <div className="flex flex-col items-center text-center leading-none pt-0.5 pl-0.5 z-20">
             <div className={`${compact ? 'text-2xl' : 'text-4xl'} font-black tracking-tight`}>{ovr}</div>
             <div className={`${compact ? 'text-xs' : 'text-sm'} font-extrabold tracking-wide mt-0.5`}>{posCode}</div>
             <div className="text-[10px] font-black tracking-tighter opacity-85">++</div>
           </div>
 
-          {/* Center-Right Portrait */}
           <div className="absolute inset-0 flex items-center justify-center pl-6 pointer-events-none">
             {interactivePhoto ? (
               <div className="pointer-events-auto">{interactivePhoto}</div>
@@ -316,7 +317,6 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           </div>
         </div>
 
-        {/* Player Name Bar */}
         <div
           className="relative z-10 text-center border-t pt-1.5 mt-1"
           style={{ borderColor: t.line }}
@@ -327,7 +327,6 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           </div>
         </div>
 
-        {/* 6 Stats in a Single Horizontal Row (PAC SHO PAS DRI DEF PHY) */}
         <div
           className="relative z-10 grid grid-cols-6 gap-0.5 border-t pt-1.5 mt-1 text-center"
           style={{ borderColor: t.line }}
@@ -344,13 +343,11 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           ))}
         </div>
 
-        {/* Subtle Role Subtitle inside card footer */}
         <div className="relative z-10 text-center mt-1">
           <span className="text-[10px] font-bold opacity-75">{c.role}</span>
         </div>
       </div>
 
-      {/* Bottom EA FC Metadata Pill: Skill Moves (★) | Weak Foot (🦶) | Height */}
       <div
         dir="ltr"
         className={`
@@ -383,20 +380,49 @@ function Player() {
   const [name, setName] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [myIds, setMyIds] = useState(() => getMyRegIds())
 
   const submit = async (e) => {
     e.preventDefault()
+    const cleanName = name.trim()
+    if (!cleanName) return
     setBusy(true); setMsg('')
-    const { error } = await supabase.from('registrations').insert({ player_name: name.trim(), status: 'pending' })
+    try {
+      const regId = await rpc('public_register_player', { p_name: cleanName })
+      if (regId) {
+        saveMyRegId(regId)
+        setMyIds(getMyRegIds())
+      }
+      // Send instant push notification via ntfy if configured by admin
+      if (settings?.ntfy_topic?.trim()) {
+        fetch(`https://ntfy.sh/${ encodeURIComponent(settings.ntfy_topic.trim()) }`, {
+          method: 'POST',
+          body: `⚽ בקשת הרשמה חדשה מ-${cleanName} ממתינה לאישור ב-/admin`,
+          headers: { Title: 'כדורגל וייסגל - הרשמה חדשה' },
+        }).catch(() => {})
+      }
+      setName('')
+      setMsg('בקשתך נשלחה! המנהל יאשר את הרשימה בקרוב (קישור לתשלום ב-Bit ייפתח כאן במכשירך לאחר שתאושר).')
+    } catch (err) {
+      if (err?.message?.includes('registration_closed')) {
+        setMsg('ההרשמה למשחק עדיין סגורה.')
+      } else {
+        setMsg('ההרשמה נכשלה. בדקו שהשם באורך 2–40 תווים ונסו שוב.')
+      }
+    }
     setBusy(false)
-    if (error) return setMsg('ההרשמה נכשלה. בדקו שהשם באורך 2–40 תווים ונסו שוב.')
-    setName(''); setMsg('נרשמת! הארגון יאשר אותך בקרוב.')
   }
 
   if (!settings) return <Shell title="טוען…" />
   const parts = (settings.match_time || '').split(',').map((s) => s.trim()).filter(Boolean)
   const matchDay = parts[0] || ''
   const matchHour = parts.slice(1).join(', ')
+
+  // Check if THIS device belongs to an approved (confirmed) player
+  const myConfirmedPlayer = confirmed.find((p) => myIds.includes(p.id))
+  const regOpen = settings.registration_open !== false
+  const bitEnabled = settings.bit_enabled !== false
+
   return (
     <Shell title={settings.title || 'כדורגל וייסגל'}>
       <section className="bg-white/90 rounded-2xl shadow-md px-4 py-5 text-center space-y-3">
@@ -413,52 +439,77 @@ function Player() {
         </div>
       </section>
 
-      <section>
-        <a href={settings.bit_link} target="_blank" rel="noreferrer"
-          className="block text-center bg-bib text-white font-bold text-xl rounded-xl py-4 shadow-md">
-          תשלום ב-Bit · {settings.price} ₪
-        </a>
-        <p className="mt-2 text-sm text-stone-600 text-center">אם משלמים ב-Bit מחשבון אחר, יש לציין בהערה את שם השחקן</p>
-      </section>
+      {/* Protected Bit Payment Section: Only visible if Admin enabled Bit AND this device belongs to a confirmed player */}
+      {bitEnabled && myConfirmedPlayer && !myConfirmedPlayer.is_paid && (
+        <section className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-4 space-y-2 shadow-md">
+          <p className="text-center font-extrabold text-stone-800">
+            🎉 {myConfirmedPlayer.player_name}, אושרת למשחק!
+          </p>
+          <a href={settings.bit_link} target="_blank" rel="noreferrer"
+            className="block text-center bg-bib text-white font-bold text-xl rounded-xl py-4 shadow-md">
+            לחץ כאן לתשלום ב-Bit · {settings.price} ₪
+          </a>
+          <p className="text-xs text-stone-600 text-center">
+            אם משלמים ב-Bit מחשבון אחר, חובה לציין בהערה את השם: <b>{myConfirmedPlayer.player_name}</b>
+          </p>
+        </section>
+      )}
 
       {settings.teams_published && <Teams colors={settings.team_colors} players={confirmed} />}
 
-      <form onSubmit={submit} className="space-y-3">
-        <label className="block font-medium text-center" htmlFor="n">שם מלא</label>
-        <input id="n" value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={40}
-          className="w-full rounded-lg border border-stone-300 bg-white px-3 py-3" />
-        <button disabled={busy} className={`${btn} w-full bg-pitch text-chalk`}>הירשם למשחק</button>
-        {msg && <p className="text-sm" role="status">{msg}</p>}
-      </form>
+      {/* Registration Form OR Registration Closed Notice */}
+      {regOpen ? (
+        <form onSubmit={submit} className="space-y-3 bg-white/90 rounded-2xl p-4 border border-stone-200 shadow-sm">
+          <label className="block font-bold text-center text-lg" htmlFor="n">רישום למשחק הקרוב</label>
+          <input id="n" placeholder="הקלד שם מלא..." value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={40}
+            className="w-full rounded-lg border border-stone-300 bg-white px-3 py-3 text-center font-medium" />
+          <button disabled={busy} className={`${btn} w-full bg-pitch text-chalk text-lg`}>שלח בקשת הרשמה</button>
+          <p className="text-xs text-stone-500 text-center">
+            לאחר שליחת הבקשה המנהל יאשר את רשימת ה-15, וקישור ה-Bit ייפתח אוטומטית במכשירך עם האישור.
+          </p>
+          {msg && <p className="text-sm font-bold text-pitch text-center" role="status">{msg}</p>}
+        </form>
+      ) : (
+        <section className="bg-stone-800 text-chalk rounded-2xl p-5 text-center space-y-1 shadow-md">
+          <div className="text-lg font-extrabold">🔒 ההרשמה למשחק סגורה כעת</div>
+          <p className="text-sm opacity-90">
+            {settings.registration_note || 'ההרשמה למשחק הקרוב תיפתח ביום רביעי בשעה 10:00'}
+          </p>
+        </section>
+      )}
 
       <section>
-        <h2 className="text-xl font-bold mb-2">מגיעים ({confirmed.length}/{CAP})</h2>
-        {confirmed.length === 0 && <p className="text-stone-500">עדיין אין מאושרים. הירשמו למעלה.</p>}
+        <h2 className="text-xl font-bold mb-2">מגיעים מאושרים ({confirmed.length}/{CAP})</h2>
+        {confirmed.length === 0 && <p className="text-stone-500">עדיין אין מאושרים.</p>}
         <ul className="divide-y divide-stone-200 bg-white rounded-lg">
           {confirmed.map((p) => (
             <li key={p.id} className="flex justify-between px-3 py-2">
-              <span>{p.player_name}</span>
-              <span className={p.is_paid ? 'text-green-700' : 'text-stone-500'}>
-                {p.is_paid ? 'שולם' : <>לא שולם · <Countdown since={p.approved_at} /></>}
+              <span className="font-medium">{p.player_name}</span>
+              <span className={p.is_paid ? 'text-green-700 font-bold' : 'text-stone-500'}>
+                {p.is_paid ? 'שולם ✓' : <>לא שולם · <Countdown since={p.approved_at} /></>}
               </span>
             </li>
           ))}
         </ul>
       </section>
 
-      {/* Matchweek Honors with TOTW In-Form Cards */}
-      {awards?.awards_published && AWARDS.some(([k]) => awards[k]) && (
+      {/* Matchweek Honors with TOTW In-Form Cards (Supports 1 or 2 tied winners per category) */}
+      {awards?.awards_published && AWARDS.some(([k1, k2]) => awards[k1] || awards[k2]) && (
         <section className="space-y-3">
           <h2 className="text-xl font-bold text-center">נתוני מחזור 🔥</h2>
           <p className="text-xs text-stone-500 text-center">לחצו על יהלום ה-PlayStyle+ שעל הקלף כדי לראות את היכולת המיוחדת</p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {AWARDS.map(([k, icon, label]) => {
-              const pName = awards[k]
-              if (!pName) return null
+          <div className="grid grid-cols-1 gap-4">
+            {AWARDS.map(([k1, k2, icon, label]) => {
+              const winners = [awards[k1], awards[k2]].map((s) => (s || '').trim()).filter(Boolean)
+              if (winners.length === 0) return null
               return (
-                <div key={k} className="bg-white/95 rounded-2xl shadow-sm border border-stone-200 p-3 text-center space-y-1">
-                  <div className="text-sm font-extrabold text-stone-700">{icon} {label}</div>
-                  <FutCard name={pName} card={featuredCards[pName]} variant="totw" boost={2} compact />
+                <div key={k1} className="bg-white/95 rounded-2xl shadow-sm border border-stone-200 p-3 text-center space-y-2">
+                  <div className="text-base font-extrabold text-stone-800">{icon} {label}</div>
+                  <div className={`grid gap-3 justify-items-center ${winners.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                    {winners.map((pName, idx) => (
+                      <FutCard key={`${k1}-${idx}-${pName}`} name={pName} card={featuredCards[pName]} variant="totw" boost={2} compact />
+                    ))}
+                  </div>
                 </div>
               )
             })}
@@ -489,7 +540,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
   })
   const [busy, setBusy] = useState(false)
 
-  // Live interactive image crop/pan/zoom state
   const [rawImg, setRawImg] = useState(null)
   const [zoom, setZoom] = useState(1.2)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
@@ -604,7 +654,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
       <div className="bg-chalk w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl p-4 space-y-4" onClick={(e) => e.stopPropagation()}>
         <FutCard name={name} card={c} interactivePhoto={interactivePhotoNode} />
 
-        {/* Photo Upload & Live Zoom/Drag Controls */}
         <div className="bg-white rounded-xl p-3 border border-stone-200 space-y-2">
           <div className="flex gap-2 justify-center flex-wrap">
             <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onSelectFile} />
@@ -631,7 +680,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
 
         <p className="text-center text-sm text-stone-600">דירוג מחושב מהקלף: <b>{ratingFromStats(c)}</b> (נשמר בעת שמירת הקלף)</p>
 
-        {/* 6 Stats Sliders */}
         {STATS.map(([k, label]) => (
           <label key={k} className="flex items-center gap-2">
             <span className="w-10 text-sm font-bold" dir="ltr">{label}</span>
@@ -641,7 +689,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
           </label>
         ))}
 
-        {/* Height & Tactical Role */}
         <label className="flex items-center gap-2">
           <span className="w-10 text-sm font-bold">גובה</span>
           <input type="range" min="150" max="210" value={clamp(c.height_cm, 150, 210)} onChange={(e) => set('height_cm', Number(e.target.value))} className="flex-1" />
@@ -655,7 +702,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
           </select>
         </label>
 
-        {/* Skill Moves (1-5★) & Weak Foot (1-5★) + PlayStyle+ */}
         <div className="bg-white rounded-xl p-3 border border-stone-200 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -736,6 +782,10 @@ function Admin() {
   const [awardsDraft, setAwardsDraft] = useState(null)
   const [awardsSaved, setAwardsSaved] = useState(null)
   const [next, setNext] = useState(null)
+  const [showSecondWinner, setShowSecondWinner] = useState({})
+  const [rosterSearch, setRosterSearch] = useState('')
+  const [newPlayerName, setNewPlayerName] = useState('')
+  const [rosterOpen, setRosterOpen] = useState(false)
   const tried = useRef(false)
 
   const refresh = useCallback(async (p = pin) => {
@@ -750,8 +800,11 @@ function Admin() {
       setAwardsSaved(aw[0])
       setAwardsDraft((d) => d ?? {
         top_scorer: aw[0].top_scorer || '',
+        top_scorer_2: aw[0].top_scorer_2 || '',
         mvp_star: aw[0].mvp_star || '',
+        mvp_star_2: aw[0].mvp_star_2 || '',
         best_duo: aw[0].best_duo || '',
+        best_duo_2: aw[0].best_duo_2 || '',
         potm_player: aw[0].potm_player || '',
       })
     }
@@ -767,7 +820,16 @@ function Admin() {
   useEffect(() => { if (pin) login() }, []) // eslint-disable-line
   useEffect(() => { if (authed) { const t = setInterval(refresh, 10000); return () => clearInterval(t) } }, [authed, refresh])
   useEffect(() => {
-    if (settings && !draft) setDraft({ ...settings, team_colors: settings.team_colors.join(', ') })
+    if (settings && !draft) {
+      setDraft({
+        ...settings,
+        team_colors: settings.team_colors.join(', '),
+        registration_open: settings.registration_open !== false,
+        registration_note: settings.registration_note || 'ההרשמה למשחק הקרוב תיפתח ביום רביעי בשעה 10:00',
+        bit_enabled: settings.bit_enabled !== false,
+        ntfy_topic: settings.ntfy_topic || '',
+      })
+    }
   }, [settings, draft])
   useEffect(() => {
     if (settings && !next) setNext({ match_time: settings.match_time, price: settings.price, bit_link: settings.bit_link })
@@ -776,8 +838,14 @@ function Admin() {
   const confirmedRows = rows.filter((r) => r.status === 'confirmed')
   const allKnownNames = Array.from(new Set([...rows.map((r) => r.player_name), ...Object.keys(ratings)])).sort()
   const colors = settings?.team_colors || []
-  const cardOf = (r) => ({ ...DEFAULT_CARD, ...ratings[r.player_name] })
-  const rOf = (r) => Number(ratings[r.player_name]?.rating ?? 3)
+  const cardOf = (nameOrRow) => {
+    const pName = typeof nameOrRow === 'string' ? nameOrRow : nameOrRow.player_name
+    return { ...DEFAULT_CARD, ...ratings[pName] }
+  }
+  const rOf = (nameOrRow) => {
+    const pName = typeof nameOrRow === 'string' ? nameOrRow : nameOrRow.player_name
+    return Number(ratings[pName]?.rating ?? 3)
+  }
   const teamInfo = (t) => {
     const rs = teamRows(t), n = rs.length, sum = (f) => rs.reduce((a, r) => a + f(r), 0)
     return `${n} שחקנים · דירוג ${fmtAvg(sum(rOf), n)} · OVR ${fmtAvg(sum((r) => ovrOf(cardOf(r))), n)} · גובה ${fmtAvg(sum((r) => Number(cardOf(r).height_cm)), n)} ס"מ`
@@ -800,26 +868,32 @@ function Admin() {
     try { await rpc('admin_set_rating', { p_pin: pin, p_name: name, p_rating: v }) }
     catch { alert('שמירת הדירוג נכשלה'); refresh() }
   }
-  const rate = (r) => (
-    <select aria-label={`דירוג ${r.player_name}`} value={ratings[r.player_name]?.rating ?? ''}
-      onChange={(e) => setRating(r.player_name, Number(e.target.value))}
-      className="rounded border border-stone-300 bg-white px-1 py-1">
-      <option value="" disabled>דירוג</option>
-      {RATING_STEPS.map((n) => <option key={n} value={n}>{n}</option>)}
-    </select>
-  )
+  const rate = (nameOrRow) => {
+    const pName = typeof nameOrRow === 'string' ? nameOrRow : nameOrRow.player_name
+    return (
+      <select aria-label={`דירוג ${pName}`} value={ratings[pName]?.rating ?? ''}
+        onChange={(e) => setRating(pName, Number(e.target.value))}
+        className="rounded border border-stone-300 bg-white px-1 py-1 text-sm">
+        <option value="" disabled>דירוג</option>
+        {RATING_STEPS.map((n) => <option key={n} value={n}>{n}</option>)}
+      </select>
+    )
+  }
   const smBtn = 'rounded-lg px-2 py-1 text-sm'
   const setRole = async (name, role) => {
     setRatings((m) => ({ ...m, [name]: { ...DEFAULT_CARD, ...m[name], player_name: name, role } }))
     try { await rpc('admin_set_role', { p_pin: pin, p_name: name, p_role: role }) }
     catch { alert('שמירת התפקיד נכשלה'); refresh() }
   }
-  const roleSel = (r) => (
-    <select aria-label={`תפקיד ${r.player_name}`} value={cardOf(r).role} onChange={(e) => setRole(r.player_name, e.target.value)}
-      className="rounded border border-stone-300 bg-white px-1 py-1 max-w-32">
-      {ROLES.map((x) => <option key={x} value={x}>{x}</option>)}
-    </select>
-  )
+  const roleSel = (nameOrRow) => {
+    const pName = typeof nameOrRow === 'string' ? nameOrRow : nameOrRow.player_name
+    return (
+      <select aria-label={`תפקיד ${pName}`} value={cardOf(pName).role} onChange={(e) => setRole(pName, e.target.value)}
+        className="rounded border border-stone-300 bg-white px-1 py-1 max-w-32 text-sm">
+        {ROLES.map((x) => <option key={x} value={x}>{x}</option>)}
+      </select>
+    )
+  }
   const saveCard = async (name, c) => {
     try {
       await rpc('admin_set_player_card', {
@@ -832,15 +906,38 @@ function Admin() {
       setCardFor(null)
     } catch { alert('שמירת הקלף נכשלה') }
   }
+
+  const addPlayerToRoster = async (e) => {
+    e.preventDefault()
+    const clean = newPlayerName.trim()
+    if (!clean) return
+    await setRating(clean, 3)
+    setNewPlayerName('')
+    setCardFor(clean)
+  }
+
+  const deleteFromRoster = async (pName) => {
+    if (!confirm(`למחוק את "${pName}" ממאגר השחקנים והדירוגים הקבוע?`)) return
+    try {
+      await rpc('admin_delete_player_rating', { p_pin: pin, p_name: pName })
+      await refresh()
+    } catch { alert('מחיקת השחקן נכשלה') }
+  }
+
   const bulk = (message, fn, args) => () => confirm(message) && act(fn, args)()
 
   const saveAwards = (publish) => async () => {
-    if (publish && !AWARDS.some(([k]) => awardsDraft[k]?.trim())) return alert('יש למלא לפחות קטגוריה אחת בנתוני המחזור')
+    if (publish && !AWARDS.some(([k1, k2]) => awardsDraft[k1]?.trim() || awardsDraft[k2]?.trim())) {
+      return alert('יש למלא לפחות קטגוריה אחת בנתוני המחזור')
+    }
     if (!publish && !confirm('לבטל פרסום ולהסתיר את נתוני המחזור?')) return
     await act('admin_save_awards', {
       p_top_scorer: awardsDraft.top_scorer || '',
+      p_top_scorer_2: awardsDraft.top_scorer_2 || '',
       p_mvp_star: awardsDraft.mvp_star || '',
+      p_mvp_star_2: awardsDraft.mvp_star_2 || '',
       p_best_duo: awardsDraft.best_duo || '',
+      p_best_duo_2: awardsDraft.best_duo_2 || '',
       p_published: publish,
       p_potm_player: awardsDraft.potm_player ?? awardsSaved?.potm_player ?? '',
       p_potm_published: awardsSaved?.potm_published ?? false,
@@ -852,11 +949,31 @@ function Admin() {
     if (!publish && !confirm('לבטל פרסום ולהסתיר את שחקן החודש?')) return
     await act('admin_save_awards', {
       p_top_scorer: awardsSaved?.top_scorer ?? awardsDraft.top_scorer ?? '',
+      p_top_scorer_2: awardsSaved?.top_scorer_2 ?? awardsDraft.top_scorer_2 ?? '',
       p_mvp_star: awardsSaved?.mvp_star ?? awardsDraft.mvp_star ?? '',
+      p_mvp_star_2: awardsSaved?.mvp_star_2 ?? awardsDraft.mvp_star_2 ?? '',
       p_best_duo: awardsSaved?.best_duo ?? awardsDraft.best_duo ?? '',
+      p_best_duo_2: awardsSaved?.best_duo_2 ?? awardsDraft.best_duo_2 ?? '',
       p_published: awardsSaved?.awards_published ?? false,
       p_potm_player: awardsDraft.potm_player || '',
       p_potm_published: publish,
+    })()
+  }
+
+  const quickToggleSetting = async (patch) => {
+    if (!draft) return
+    const nextDraft = { ...draft, ...patch }
+    setDraft(nextDraft)
+    await act('admin_update_settings', {
+      p_location: nextDraft.location,
+      p_match_time: nextDraft.match_time,
+      p_price: Number(nextDraft.price),
+      p_bit_link: nextDraft.bit_link,
+      p_team_colors: nextDraft.team_colors.split(',').map((s) => s.trim()).filter(Boolean),
+      p_registration_open: nextDraft.registration_open,
+      p_registration_note: nextDraft.registration_note,
+      p_bit_enabled: nextDraft.bit_enabled,
+      p_ntfy_topic: nextDraft.ntfy_topic,
     })()
   }
 
@@ -891,11 +1008,18 @@ function Admin() {
 
   const saveSettings = async (e) => {
     e.preventDefault()
-    await act('admin_update_settings', {
-      p_location: draft.location, p_match_time: draft.match_time, p_price: Number(draft.price),
-      p_bit_link: draft.bit_link,
-      p_team_colors: draft.team_colors.split(',').map((s) => s.trim()).filter(Boolean),
-    })()
+    await quickToggleSetting({})
+  }
+
+  const testPushNotification = async () => {
+    const topic = draft?.ntfy_topic?.trim()
+    if (!topic) return alert('הזן קודם שם ערוץ התראות (למשל weisgal-ilai-1709)')
+    await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+      method: 'POST',
+      body: 'בדיקת התראה! אם אתה רואה את זה באייפון, תקבל התראה בכל הרשמה חדשה ⚽',
+      headers: { Title: 'כדורגל וייסגל - בדיקה' },
+    })
+    alert('נשלחה התראת בדיקה לערוץ שלך ב-ntfy!')
   }
 
   if (!authed) return (
@@ -921,7 +1045,8 @@ function Admin() {
       <ul className="divide-y divide-stone-200 bg-white rounded-lg">
         {items.map((r) => (
           <li key={r.id} className="px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-            <span>{r.player_name}</span><div className="flex gap-2 items-center flex-wrap">{children(r)}</div>
+            <span className="font-medium">{r.player_name}</span>
+            <div className="flex gap-2 items-center flex-wrap">{children(r)}</div>
           </li>
         ))}
       </ul>
@@ -930,17 +1055,60 @@ function Admin() {
   const remove = (r) => <button className={`${btn} text-red-700`} onClick={() => confirm(`להסיר את ${r.player_name}?`) && act('admin_remove', { p_id: r.id })()}>הסר</button>
   const field = 'w-full rounded-lg border border-stone-300 bg-white px-3 py-2'
 
+  const rosterNames = Object.keys(ratings)
+    .filter((n) => !rosterSearch.trim() || n.includes(rosterSearch.trim()))
+    .sort((a, b) => a.localeCompare(b, 'he'))
+
   return (
     <Shell title="ניהול משחק">
+      {/* Quick Control Bar: Registration Open/Close & Bit Visibility */}
+      {draft && (
+        <section className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm space-y-3">
+          <h2 className="text-lg font-extrabold">בקרה מהירה (הרשמה ו-Bit)</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => quickToggleSetting({ registration_open: !draft.registration_open })}
+              className={`rounded-xl py-3 px-4 font-bold text-sm border transition ${
+                draft.registration_open
+                  ? 'bg-green-700 text-white border-green-800'
+                  : 'bg-stone-800 text-white border-stone-900'
+              }`}
+            >
+              {draft.registration_open ? '🟢 ההרשמה פתוחה (לחץ לסגירה)' : '🔒 ההרשמה סגורה (לחץ לפתיחה)'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => quickToggleSetting({ bit_enabled: !draft.bit_enabled })}
+              className={`rounded-xl py-3 px-4 font-bold text-sm border transition ${
+                draft.bit_enabled
+                  ? 'bg-bib text-white border-amber-700'
+                  : 'bg-stone-200 text-stone-700 border-stone-300'
+              }`}
+            >
+              {draft.bit_enabled ? '💳 תשלום Bit פעיל למאושרים (לחץ לכיבוי)' : '🚫 כפתור Bit מוסתר מכולם (לחץ להפעלה)'}
+            </button>
+          </div>
+          <p className="text-xs text-stone-500">
+            * גם כשתשלום Bit פעיל, הכפתור מופיע אך ורק במכשיר של שחקן שכבר אישרת לרשימת ה-15!
+          </p>
+        </section>
+      )}
+
       <List title="ממתינים לאישור" items={by('pending')}
         actions={by('pending').length > 0 && (
           <button className={`${btn} bg-pitch text-chalk`}
             onClick={bulk('לאשר את כל הממתינים? מעבר ל-15 מגיעים יועברו לרשימת מזמינים.', 'admin_approve_all', {})}>אשר הכל</button>
         )}>
         {(r) => <>
-          {rate(r)}<button className={`${btn} bg-pitch text-chalk`} onClick={act('admin_approve', { p_id: r.id })}>אשר</button>{remove(r)}
+          {rate(r)}
+          <button className={`${smBtn} bg-stone-800 text-white`} onClick={() => setCardFor(r.player_name)}>קלף FC</button>
+          <button className={`${btn} bg-pitch text-chalk`} onClick={act('admin_approve', { p_id: r.id })}>אשר</button>
+          {remove(r)}
         </>}
       </List>
+
       <List title="מגיעים" items={by('confirmed')}
         actions={by('confirmed').length > 0 && <>
           <button className={`${smBtn} bg-green-50 text-green-800 border border-green-300`}
@@ -962,6 +1130,7 @@ function Admin() {
           {remove(r)}
         </>}
       </List>
+
       <List title="רשימת מזמינים" items={by('waitlist')}>
         {(r) => <>
           <button className={`${btn} bg-bib text-white`} disabled={by('confirmed').length >= CAP}
@@ -1005,23 +1174,62 @@ function Admin() {
         </section>
       )}
 
+      {/* Matchweek Awards with up to 2 tied winners per category + POTM */}
       {awardsDraft && (
         <section className="space-y-4 bg-white rounded-xl p-4 border border-stone-200">
           <h2 className="text-xl font-bold">נתוני מחזור (קלפי TOTW 🔥)</h2>
-          <p className="text-xs text-stone-600">כל שחקן שתבחר כאן יוצג בעמוד הראשי עם קלף ה-TOTW השחור-זהב שלו (כולל התמונה, ה-PlayStyle+ והכוכבים שהגדרת לו ב-"קלף FC").</p>
-          {AWARDS.map(([k, icon, label]) => (
-            <div key={k} className="space-y-1">
-              <span className="text-sm font-bold">{icon} {label}</span>
-              <div className="flex gap-2">
-                <input className={field} list="players-dl" placeholder="בחר או הקלד שם שחקן..." value={awardsDraft[k]} onChange={(e) => setAwardsDraft({ ...awardsDraft, [k]: e.target.value })} />
-                {awardsDraft[k]?.trim() && (
-                  <button type="button" onClick={() => setCardFor(awardsDraft[k].trim())} className="rounded-lg px-3 py-2 text-xs font-bold bg-stone-800 text-white shrink-0">
-                    ערוך קלף
-                  </button>
+          <p className="text-xs text-stone-600">אפשר לבחור שחקן אחד או להוסיף שחקן שני (תיקו) — כל שחקן יקבל קלף TOTW נפרד משלו!</p>
+          {AWARDS.map(([k1, k2, icon, label]) => {
+            const hasSecond = showSecondWinner[k1] || Boolean(awardsDraft[k2]?.trim())
+            return (
+              <div key={k1} className="space-y-2 border-b border-stone-100 pb-3 last:border-b-0">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold">{icon} {label}</span>
+                  {!hasSecond && (
+                    <button
+                      type="button"
+                      onClick={() => setShowSecondWinner((prev) => ({ ...prev, [k1]: true }))}
+                      className="text-xs font-bold text-pitch underline"
+                    >
+                      + הוסף שחקן נוסף (תיקו)
+                    </button>
+                  )}
+                </div>
+
+                {/* Winner 1 */}
+                <div className="flex gap-2">
+                  <input className={field} list="players-dl" placeholder="בחר או הקלד שם שחקן..." value={awardsDraft[k1] || ''} onChange={(e) => setAwardsDraft({ ...awardsDraft, [k1]: e.target.value })} />
+                  {awardsDraft[k1]?.trim() && (
+                    <button type="button" onClick={() => setCardFor(awardsDraft[k1].trim())} className="rounded-lg px-3 py-2 text-xs font-bold bg-stone-800 text-white shrink-0">
+                      ערוך קלף
+                    </button>
+                  )}
+                </div>
+
+                {/* Winner 2 (Tied) */}
+                {hasSecond && (
+                  <div className="flex gap-2 items-center pr-3 border-r-2 border-amber-400">
+                    <input className={field} list="players-dl" placeholder="שחקן שני בתיקו..." value={awardsDraft[k2] || ''} onChange={(e) => setAwardsDraft({ ...awardsDraft, [k2]: e.target.value })} />
+                    {awardsDraft[k2]?.trim() && (
+                      <button type="button" onClick={() => setCardFor(awardsDraft[k2].trim())} className="rounded-lg px-3 py-2 text-xs font-bold bg-stone-800 text-white shrink-0">
+                        ערוך קלף
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAwardsDraft({ ...awardsDraft, [k2]: '' })
+                        setShowSecondWinner((prev) => ({ ...prev, [k1]: false }))
+                      }}
+                      className="text-xs text-red-700 font-bold px-2"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
+            )
+          })}
           <datalist id="players-dl">{allKnownNames.map((n) => <option key={n} value={n} />)}</datalist>
           <div className="flex gap-2 flex-wrap pt-1">
             <button className={`${btn} bg-pitch text-chalk`} onClick={saveAwards(true)}>פרסם נתוני מחזור</button>
@@ -1051,22 +1259,112 @@ function Admin() {
         </section>
       )}
 
+      {/* Persistent Player Database (מאגר שחקנים קבוע) */}
+      <section className="bg-white rounded-xl p-4 border border-stone-200 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold">מאגר שחקנים ודירוגים קבוע ({Object.keys(ratings).length})</h2>
+            <p className="text-xs text-stone-500">ערוך דירוגים, תפקידים וקלפי FC של כל השחקנים בכל זמן, או הוסף שחקנים חדשים מראש.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRosterOpen((v) => !v)}
+            className="rounded-lg px-3 py-1.5 text-sm font-bold bg-stone-100 border border-stone-300"
+          >
+            {rosterOpen ? 'הסתר מאגר ▲' : 'פתח מאגר ▼'}
+          </button>
+        </div>
+
+        {rosterOpen && (
+          <div className="space-y-3 pt-2 border-t border-stone-200">
+            <form onSubmit={addPlayerToRoster} className="flex gap-2">
+              <input
+                className={field}
+                placeholder="הוסף שחקן חדש למאגר..."
+                value={newPlayerName}
+                onChange={(e) => setNewPlayerName(e.target.value)}
+              />
+              <button className={`${btn} bg-pitch text-chalk shrink-0`}>+ הוסף</button>
+            </form>
+
+            <input
+              className={field}
+              placeholder="🔍 חיפוש שחקן במאגר..."
+              value={rosterSearch}
+              onChange={(e) => setRosterSearch(e.target.value)}
+            />
+
+            <ul className="divide-y divide-stone-200 max-h-96 overflow-y-auto border border-stone-200 rounded-lg">
+              {rosterNames.map((pName) => (
+                <li key={pName} className="p-2.5 flex flex-wrap items-center justify-between gap-2 hover:bg-stone-50">
+                  <div className="flex items-center gap-2">
+                    {ratings[pName]?.photo_url ? (
+                      <img src={ratings[pName].photo_url} alt={pName} className="w-8 h-8 rounded-full object-cover border border-stone-300" />
+                    ) : (
+                      <span className="w-8 h-8 rounded-full bg-stone-200 flex items-center justify-center text-xs font-bold text-stone-600">
+                        {ovrOf(cardOf(pName))}
+                      </span>
+                    )}
+                    <div>
+                      <div className="font-bold text-sm">{pName}</div>
+                      <div className="text-[11px] text-stone-500">OVR {ovrOf(cardOf(pName))} · {cardOf(pName).height_cm} ס"מ</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {rate(pName)}
+                    {roleSel(pName)}
+                    <button type="button" className={`${smBtn} bg-stone-800 text-white`} onClick={() => setCardFor(pName)}>
+                      קלף FC
+                    </button>
+                    <button type="button" className="text-red-600 text-xs font-bold px-2 py-1" onClick={() => deleteFromRoster(pName)}>
+                      🗑️
+                    </button>
+                  </div>
+                </li>
+              ))}
+              {rosterNames.length === 0 && <li className="p-3 text-center text-sm text-stone-500">לא נמצאו שחקנים.</li>}
+            </ul>
+          </div>
+        )}
+      </section>
+
       {draft && (
-        <form onSubmit={saveSettings} className="space-y-3">
-          <h2 className="text-xl font-bold">הגדרות משחק</h2>
-          {[['location', 'מיקום'], ['match_time', 'זמן'], ['price', 'מחיר (₪)'], ['bit_link', 'קישור Bit'], ['team_colors', 'צבעי קבוצות (מופרדים בפסיק)']].map(([k, label]) => (
-            <label key={k} className="block"><span className="text-sm">{label}</span>
+        <form onSubmit={saveSettings} className="space-y-3 bg-white rounded-xl p-4 border border-stone-200">
+          <h2 className="text-xl font-bold">הגדרות משחק והתראות</h2>
+          {[['location', 'מיקום'], ['match_time', 'זמן'], ['price', 'מחיר (₪)'], ['bit_link', 'קישור Bit'], ['team_colors', 'צבעי קבוצות (מופרדים בפסיק)'], ['registration_note', 'הודעה כשההרשמה סגורה']].map(([k, label]) => (
+            <label key={k} className="block"><span className="text-sm font-medium">{label}</span>
               <input className={field} value={draft[k]} type={k === 'price' ? 'number' : 'text'}
                 dir={k === 'bit_link' ? 'ltr' : undefined} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} />
             </label>
           ))}
+
+          <div className="pt-2 border-t border-stone-200 space-y-1">
+            <span className="text-sm font-bold">🔔 התראות Push לאייפון בהרשמה חדשה (ntfy)</span>
+            <p className="text-xs text-stone-500">
+              הורד את אפליקציית <b>ntfy</b> מה-App Store, לחץ על <b>+</b> והירשם לערוץ סודי משלך (למשל: <code dir="ltr">weisgal-ilai-1709</code>), והזן את אותו שם כאן:
+            </p>
+            <div className="flex gap-2">
+              <input
+                className={field}
+                dir="ltr"
+                placeholder="weisgal-ilai-1709"
+                value={draft.ntfy_topic || ''}
+                onChange={(e) => setDraft({ ...draft, ntfy_topic: e.target.value })}
+              />
+              <button type="button" onClick={testPushNotification} className="rounded-lg px-3 py-2 text-xs font-bold bg-stone-800 text-white shrink-0">
+                בדיקת התראה
+              </button>
+            </div>
+          </div>
+
           <button className={`${btn} w-full bg-pitch text-chalk`}>שמור הגדרות</button>
         </form>
       )}
+
       {next && (
         <form onSubmit={doReset} className="space-y-3 border-t border-stone-300 pt-5">
           <h2 className="text-xl font-bold">איפוס משחק לשבוע הבא</h2>
-          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ונתוני המחזור ומבטל פרסום קבוצות. הדירוגים, התפקידים, הקלפים ושחקן החודש יישמרו.</p>
+          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ונתוני המחזור ומבטל פרסום קבוצות. הדירוגים, התפקידים, הקלפים ושחקן החודש נשמרים.</p>
           {[['match_time', 'תאריך וזמן המשחק הבא'], ['price', 'מחיר (₪)'], ['bit_link', 'קישור Bit']].map(([k, label]) => (
             <label key={k} className="block"><span className="text-sm">{label}</span>
               <input className={field} value={next[k]} type={k === 'price' ? 'number' : 'text'}
@@ -1076,6 +1374,7 @@ function Admin() {
           <button className={`${btn} w-full bg-red-700 text-white`}>איפוס משחק לשבוע הבא</button>
         </form>
       )}
+
       {cardFor && (
         <FcCardModal key={cardFor} name={cardFor} initial={ratings[cardFor]}
           onSave={(c) => saveCard(cardFor, c)} onClose={() => setCardFor(null)} />
