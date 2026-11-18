@@ -3,10 +3,14 @@ import { supabase, rpc } from './supabase'
 import { balance } from './balance'
 
 const CAP = 15
-const RATING_STEPS = Array.from({ length: 9 }, (_, i) => 1 + i / 2) // 1, 1.5, ... 5
+const RATING_STEPS = Array.from({ length: 9 }, (_, i) => 1 + i / 2)
 const fmtAvg = (sum, n) => (n ? (sum / n).toFixed(1) : '–')
 const HOURS_48 = 48 * 3600e3
 const MY_REGS_KEY = 'weisgal_my_reg_ids'
+
+// Strip accidental URL prefixes while preserving exact casing (ntfy topics are case-sensitive!)
+const cleanNtfyTopic = (raw) =>
+  (raw || '').trim().replace(/^https?:\/\/ntfy\.sh\//i, '').replace(/^ntfy\.sh\//i, '').replace(/^\/+|\/+$/g, '')
 
 const getMyRegIds = () => {
   try { return JSON.parse(localStorage.getItem(MY_REGS_KEY) || '[]') } catch { return [] }
@@ -96,19 +100,22 @@ function useLive() {
   const [confirmed, setConfirmed] = useState([])
   const [awards, setAwards] = useState(null)
   const [featuredCards, setFeaturedCards] = useState({})
+  const [knownNames, setKnownNames] = useState([])
 
   const load = useCallback(async () => {
     await supabase.rpc('expire_unpaid')
-    const [s, r, a, fc] = await Promise.all([
+    const [s, r, a, fc, kn] = await Promise.all([
       supabase.from('match_settings').select('*').eq('id', 1).single(),
       supabase.from('registrations').select('*').eq('status', 'confirmed').order('approved_at'),
       supabase.from('matchweek_awards').select('*').eq('id', 1).maybeSingle(),
       supabase.rpc('get_featured_cards').then((res) => res.data || [], () => []),
+      supabase.rpc('public_get_player_names').then((res) => res.data || [], () => []),
     ])
     if (s.data) setSettings(s.data)
     if (r.data) setConfirmed(r.data)
     setAwards(a.data || null)
     if (fc) setFeaturedCards(Object.fromEntries(fc.map((x) => [x.player_name, x])))
+    if (kn) setKnownNames(kn)
   }, [])
 
   useEffect(() => {
@@ -118,10 +125,10 @@ function useLive() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'registrations' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'matchweek_awards' }, load)
       .subscribe()
-    const poll = setInterval(load, 30000)
+    const poll = setInterval(load, 20000)
     return () => { supabase.removeChannel(ch); clearInterval(poll) }
   }, [load])
-  return { settings, confirmed, awards, featuredCards, reload: load }
+  return { settings, confirmed, awards, featuredCards, knownNames, reload: load }
 }
 
 function Countdown({ since }) {
@@ -376,16 +383,15 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
 
 /* ---------- Public Page ---------- */
 function Player() {
-  const { settings, confirmed, awards, featuredCards } = useLive()
+  const { settings, confirmed, awards, featuredCards, knownNames } = useLive()
   const [name, setName] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [myIds, setMyIds] = useState(() => getMyRegIds())
 
-  const submit = async (e) => {
-    e.preventDefault()
-    const cleanName = name.trim()
-    if (!cleanName) return
+  const registerName = async (targetName) => {
+    const cleanName = targetName.trim()
+    if (!cleanName || cleanName.length < 2) return
     setBusy(true); setMsg('')
     try {
       const regId = await rpc('public_register_player', { p_name: cleanName })
@@ -393,16 +399,21 @@ function Player() {
         saveMyRegId(regId)
         setMyIds(getMyRegIds())
       }
-      // Send instant push notification via ntfy if configured by admin
-      if (settings?.ntfy_topic?.trim()) {
-        fetch(`https://ntfy.sh/${ encodeURIComponent(settings.ntfy_topic.trim()) }`, {
+
+      // Fetch latest settings directly to guarantee ntfy_topic is always up to date
+      const { data: freshSettings } = await supabase.from('match_settings').select('ntfy_topic').eq('id', 1).single()
+      const topic = cleanNtfyTopic(freshSettings?.ntfy_topic || settings?.ntfy_topic)
+      if (topic) {
+        fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
           method: 'POST',
+          keepalive: true,
           body: `⚽ בקשת הרשמה חדשה מ-${cleanName} ממתינה לאישור ב-/admin`,
           headers: { Title: 'Weisgal Football - New Registration' },
         }).catch(() => {})
       }
+
       setName('')
-      setMsg('בקשתך נשלחה! המנהל יאשר את הרשימה בקרוב (קישור לתשלום ב-Bit ייפתח כאן במכשירך לאחר שתאושר).')
+      setMsg(`בקשת ההרשמה עבור ${cleanName} נקלטה בהצלחה! רשימת המגיעים הסופית תפורסם בקרוב.`)
     } catch (err) {
       if (err?.message?.includes('registration_closed')) {
         setMsg('ההרשמה למשחק עדיין סגורה.')
@@ -413,15 +424,27 @@ function Player() {
     setBusy(false)
   }
 
+  const submit = (e) => {
+    e.preventDefault()
+    registerName(name)
+  }
+
   if (!settings) return <Shell title="טוען…" />
   const parts = (settings.match_time || '').split(',').map((s) => s.trim()).filter(Boolean)
   const matchDay = parts[0] || ''
   const matchHour = parts.slice(1).join(', ')
 
-  // Check if THIS device belongs to an approved (confirmed) player
-  const myConfirmedPlayer = confirmed.find((p) => myIds.includes(p.id))
+  const listPublished = Boolean(settings.list_published)
   const regOpen = settings.registration_open !== false
   const bitEnabled = settings.bit_enabled !== false
+  const myConfirmedPlayer = listPublished ? confirmed.find((p) => myIds.includes(p.id)) : null
+
+  // Smart one-click suggestions from known roster when user types >= 1 char
+  const trimmedInput = name.trim()
+  const confirmedSet = listPublished ? new Set(confirmed.map((p) => p.player_name)) : new Set()
+  const quickSuggestions = trimmedInput.length >= 1
+    ? knownNames.filter((n) => n.includes(trimmedInput) && !confirmedSet.has(n)).slice(0, 5)
+    : []
 
   return (
     <Shell title={settings.title || 'כדורגל וייסגל'}>
@@ -439,8 +462,8 @@ function Player() {
         </div>
       </section>
 
-      {/* Protected Bit Payment Section: Only visible if Admin enabled Bit AND this device belongs to a confirmed player */}
-      {bitEnabled && myConfirmedPlayer && !myConfirmedPlayer.is_paid && (
+      {/* Protected Bit Payment Section: Only visible AFTER admin publishes the list AND on the approved player's device */}
+      {listPublished && bitEnabled && myConfirmedPlayer && !myConfirmedPlayer.is_paid && (
         <section className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-4 space-y-2 shadow-md">
           <p className="text-center font-extrabold text-stone-800">
             🎉 {myConfirmedPlayer.player_name}, אושרת למשחק!
@@ -457,15 +480,36 @@ function Player() {
 
       {settings.teams_published && <Teams colors={settings.team_colors} players={confirmed} />}
 
-      {/* Registration Form OR Registration Closed Notice */}
       {regOpen ? (
         <form onSubmit={submit} className="space-y-3 bg-white/90 rounded-2xl p-4 border border-stone-200 shadow-sm">
           <label className="block font-bold text-center text-lg" htmlFor="n">רישום למשחק הקרוב</label>
-          <input id="n" placeholder="הקלד שם מלא..." value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={40}
-            className="w-full rounded-lg border border-stone-300 bg-white px-3 py-3 text-center font-medium" />
+          <input id="n" placeholder="התחל להקליד שם לבחירה מהירה..." value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={40}
+            autoComplete="off" className="w-full rounded-lg border border-stone-300 bg-white px-3 py-3 text-center font-medium" />
+
+          {quickSuggestions.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[11px] text-stone-500 text-center">הרשמה בלחיצה מהמאגר הקבוע:</p>
+              <div className="flex flex-wrap justify-center gap-1.5">
+                {quickSuggestions.map((sName) => (
+                  <button
+                    key={sName}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => registerName(sName)}
+                    className="rounded-full bg-pitch/10 hover:bg-pitch/20 text-pitch border border-pitch/30 px-3 py-1.5 text-sm font-bold transition"
+                  >
+                    ⚡ {sName}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <button disabled={busy} className={`${btn} w-full bg-pitch text-chalk text-lg`}>שלח בקשת הרשמה</button>
           <p className="text-xs text-stone-500 text-center">
-            לאחר שליחת הבקשה המנהל יאשר את רשימת ה-15, וקישור ה-Bit ייפתח אוטומטית במכשירך עם האישור.
+            {listPublished
+              ? 'לאחר שליחת הבקשה המנהל יאשר את ההרשמה, וקישור ה-Bit ייפתח אוטומטית במכשירך עם האישור.'
+              : 'לאחר שליחת הבקשה המנהל ירכיב ויפרסם את רשימת ה-15 הסופית.'}
           </p>
           {msg && <p className="text-sm font-bold text-pitch text-center" role="status">{msg}</p>}
         </form>
@@ -478,22 +522,29 @@ function Player() {
         </section>
       )}
 
-      <section>
-        <h2 className="text-xl font-bold mb-2">מגיעים מאושרים ({confirmed.length}/{CAP})</h2>
-        {confirmed.length === 0 && <p className="text-stone-500">עדיין אין מאושרים.</p>}
-        <ul className="divide-y divide-stone-200 bg-white rounded-lg">
-          {confirmed.map((p) => (
-            <li key={p.id} className="flex justify-between px-3 py-2">
-              <span className="font-medium">{p.player_name}</span>
-              <span className={p.is_paid ? 'text-green-700 font-bold' : 'text-stone-500'}>
-                {p.is_paid ? 'שולם ✓' : <>לא שולם · <Countdown since={p.approved_at} /></>}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {/* Confirmed List: Shown ONLY when listPublished is true */}
+      {listPublished ? (
+        <section>
+          <h2 className="text-xl font-bold mb-2">מגיעים מאושרים ({confirmed.length}/{CAP})</h2>
+          {confirmed.length === 0 && <p className="text-stone-500">עדיין אין מאושרים.</p>}
+          <ul className="divide-y divide-stone-200 bg-white rounded-lg">
+            {confirmed.map((p) => (
+              <li key={p.id} className="flex justify-between px-3 py-2">
+                <span className="font-medium">{p.player_name}</span>
+                <span className={p.is_paid ? 'text-green-700 font-bold' : 'text-stone-500'}>
+                  {p.is_paid ? 'שולם ✓' : <>לא שולם · <Countdown since={p.approved_at} /></>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : (
+        <section className="bg-white/90 rounded-2xl border border-stone-200 p-4 text-center space-y-1 shadow-sm">
+          <div className="text-base font-extrabold text-stone-800">📋 רשימת המגיעים טרם פורסמה</div>
+          <p className="text-xs text-stone-500">המנהל אוסף את הבקשות ויפרסם בקרוב את רשימת ה-15 הסופית ותשלום ה-Bit.</p>
+        </section>
+      )}
 
-      {/* Matchweek Honors with TOTW In-Form Cards (Supports 1 or 2 tied winners per category) */}
       {awards?.awards_published && AWARDS.some(([k1, k2]) => awards[k1] || awards[k2]) && (
         <section className="space-y-3">
           <h2 className="text-xl font-bold text-center">נתוני מחזור 🔥</h2>
@@ -517,7 +568,6 @@ function Player() {
         </section>
       )}
 
-      {/* Player of the Month (POTM) Showcase */}
       {awards?.potm_published && awards?.potm_player && (
         <section className="space-y-3">
           <h2 className="text-xl font-bold text-center">שחקן החודש 🏆</h2>
@@ -530,7 +580,7 @@ function Player() {
   )
 }
 
-/* ---------- Admin: FC Card Builder with Live Photo Cropper, PlayStyle+ & Skill/Weak Foot ---------- */
+/* ---------- Admin: FC Card Builder ---------- */
 function FcCardModal({ name, initial, onSave, onClose }) {
   const [c, setC] = useState({
     ...DEFAULT_CARD,
@@ -786,6 +836,7 @@ function Admin() {
   const [rosterSearch, setRosterSearch] = useState('')
   const [newPlayerName, setNewPlayerName] = useState('')
   const [rosterOpen, setRosterOpen] = useState(false)
+  const [manualName, setManualName] = useState('')
   const tried = useRef(false)
 
   const refresh = useCallback(async (p = pin) => {
@@ -827,7 +878,8 @@ function Admin() {
         registration_open: settings.registration_open !== false,
         registration_note: settings.registration_note || 'ההרשמה למשחק הקרוב תיפתח ביום רביעי בשעה 10:00',
         bit_enabled: settings.bit_enabled !== false,
-        ntfy_topic: settings.ntfy_topic || '',
+        list_published: Boolean(settings.list_published),
+        ntfy_topic: cleanNtfyTopic(settings.ntfy_topic),
       })
     }
   }, [settings, draft])
@@ -907,6 +959,13 @@ function Admin() {
     } catch { alert('שמירת הקלף נכשלה') }
   }
 
+  const addManualPlayer = (targetStatus) => async () => {
+    const clean = manualName.trim()
+    if (clean.length < 2) return alert('יש להזין שם שחקן (לפחות 2 תווים)')
+    await act('admin_add_registration', { p_name: clean, p_status: targetStatus })()
+    setManualName('')
+  }
+
   const addPlayerToRoster = async (e) => {
     e.preventDefault()
     const clean = newPlayerName.trim()
@@ -960,9 +1019,19 @@ function Admin() {
     })()
   }
 
+  const toggleListPublished = async () => {
+    if (!draft) return
+    const nextVal = !draft.list_published
+    if (nextVal && !confirm(`לפרסם עכשיו את רשימת המגיעים (${confirmedRows.length}/${CAP}) ולפתוח למאושרים את כפתור ה-Bit?`)) return
+    setDraft({ ...draft, list_published: nextVal })
+    await act('admin_publish_list', { p_published: nextVal })()
+  }
+
   const quickToggleSetting = async (patch) => {
     if (!draft) return
     const nextDraft = { ...draft, ...patch }
+    const cleanedTopic = cleanNtfyTopic(nextDraft.ntfy_topic)
+    nextDraft.ntfy_topic = cleanedTopic
     setDraft(nextDraft)
     await act('admin_update_settings', {
       p_location: nextDraft.location,
@@ -973,7 +1042,8 @@ function Admin() {
       p_registration_open: nextDraft.registration_open,
       p_registration_note: nextDraft.registration_note,
       p_bit_enabled: nextDraft.bit_enabled,
-      p_ntfy_topic: nextDraft.ntfy_topic,
+      p_ntfy_topic: cleanedTopic,
+      p_list_published: nextDraft.list_published,
     })()
   }
 
@@ -996,7 +1066,7 @@ function Admin() {
   )
   const doReset = async (e) => {
     e.preventDefault()
-    if (!confirm('לאפס את המשחק? ההרשמות, הקבוצות ונתוני המחזור יימחקו. הדירוגים, התפקידים, הקלפים ושחקן החודש יישמרו.')) return
+    if (!confirm('לאפס את המשחק? ההרשמות, הקבוצות ונתוני המחזור יימחקו, והרשימה תחזור למצב מוסתר. הדירוגים, התפקידים, הקלפים ושחקן החודש יישמרו.')) return
     await act('admin_reset_match', { p_match_time: next.match_time, p_price: Number(next.price), p_bit_link: next.bit_link })()
     setDraft(null); setAwardsDraft(null); await refresh()
   }
@@ -1009,17 +1079,26 @@ function Admin() {
   const saveSettings = async (e) => {
     e.preventDefault()
     await quickToggleSetting({})
+    alert('ההגדרות נשמרו בהצלחה!')
   }
 
   const testPushNotification = async () => {
-    const topic = draft?.ntfy_topic?.trim()
-    if (!topic) return alert('הזן קודם שם ערוץ התראות (למשל weisgal-ilai-1709)')
-    await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
-      method: 'POST',
-      body: 'בדיקת התראה! אם אתה רואה את זה באייפון, תקבל התראה בכל הרשמה חדשה ⚽',
-      headers: { Title: 'Weisgal Football - Test' },
-    })
-    alert('נשלחה התראת בדיקה לערוץ שלך ב-ntfy!')
+    const topic = cleanNtfyTopic(draft?.ntfy_topic)
+    if (!topic) return alert('הזן קודם שם ערוץ התראות (למשל Weisgalilay1709)')
+    if (draft.ntfy_topic !== topic) {
+      setDraft({ ...draft, ntfy_topic: topic })
+    }
+    try {
+      const res = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+        method: 'POST',
+        body: 'בדיקת התראה! תקבל הודעה כזו באייפון בכל הרשמה חדשה ⚽',
+        headers: { Title: 'Weisgal Football - Test' },
+      })
+      if (!res.ok) throw new Error()
+      alert(`נשלחה התראת בדיקה לערוץ: ${topic}`)
+    } catch {
+      alert('שליחת ההתראה נכשלה. בדוק חיבור לאינטרנט.')
+    }
   }
 
   if (!authed) return (
@@ -1061,10 +1140,26 @@ function Admin() {
 
   return (
     <Shell title="ניהול משחק">
-      {/* Quick Control Bar: Registration Open/Close & Bit Visibility */}
+      {/* Quick Control Bar: Blind Draft List Publish, Registration Open/Close & Bit Visibility */}
       {draft && (
         <section className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm space-y-3">
-          <h2 className="text-lg font-extrabold">בקרה מהירה (הרשמה ו-Bit)</h2>
+          <h2 className="text-lg font-extrabold">בקרה מהירה (סינון, פרסום רשימה ו-Bit)</h2>
+
+          {/* Main Blind Draft Toggle */}
+          <button
+            type="button"
+            onClick={toggleListPublished}
+            className={`w-full rounded-xl py-3.5 px-4 font-extrabold text-base border shadow-sm transition ${
+              draft.list_published
+                ? 'bg-blue-700 text-white border-blue-800'
+                : 'bg-amber-500 text-stone-950 border-amber-600'
+            }`}
+          >
+            {draft.list_published
+              ? '👁️ רשימת המאושרים מפורסמת כעת (לחץ להסתרה)'
+              : '🙈 רשימת המאושרים מוסתרת (לחץ לפרסום הרשימה ופתיחת Bit)'}
+          </button>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
               type="button"
@@ -1087,14 +1182,34 @@ function Admin() {
                   : 'bg-stone-200 text-stone-700 border-stone-300'
               }`}
             >
-              {draft.bit_enabled ? '💳 תשלום Bit פעיל למאושרים (לחץ לכיבוי)' : '🚫 כפתור Bit מוסתר מכולם (לחץ להפעלה)'}
+              {draft.bit_enabled ? '💳 תשלום Bit פעיל עם הפרסום' : '🚫 כפתור Bit כבוי ידנית'}
             </button>
           </div>
           <p className="text-xs text-stone-500">
-            * גם כשתשלום Bit פעיל, הכפתור מופיע אך ורק במכשיר של שחקן שכבר אישרת לרשימת ה-15!
+            * בזמן שרשימת המאושרים מוסתרת, אף שחקן לא רואה מי נכנס וגם כפתור ה-Bit נשאר נעול. ברגע שתלחץ לפרסם, הרשימה תיחשף ורק למאושרים ייפתח ה-Bit.
           </p>
         </section>
       )}
+
+      {/* Manual Player Addition in Admin */}
+      <section className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm space-y-2">
+        <h2 className="text-lg font-extrabold">➕ הוספת שחקן ידנית למשחק</h2>
+        <div className="flex gap-2 flex-wrap">
+          <input
+            className={`${field} flex-1 min-w-[160px]`}
+            list="players-dl"
+            placeholder="בחר מהמאגר או הקלד שם..."
+            value={manualName}
+            onChange={(e) => setManualName(e.target.value)}
+          />
+          <button type="button" onClick={addManualPlayer('confirmed')} className={`${btn} bg-pitch text-chalk text-sm`}>
+            הוסף למגיעים
+          </button>
+          <button type="button" onClick={addManualPlayer('pending')} className={`${btn} bg-stone-200 text-stone-800 text-sm`}>
+            הוסף לממתינים
+          </button>
+        </div>
+      </section>
 
       <List title="ממתינים לאישור" items={by('pending')}
         actions={by('pending').length > 0 && (
@@ -1174,7 +1289,6 @@ function Admin() {
         </section>
       )}
 
-      {/* Matchweek Awards with up to 2 tied winners per category + POTM */}
       {awardsDraft && (
         <section className="space-y-4 bg-white rounded-xl p-4 border border-stone-200">
           <h2 className="text-xl font-bold">נתוני מחזור (קלפי TOTW 🔥)</h2>
@@ -1196,7 +1310,6 @@ function Admin() {
                   )}
                 </div>
 
-                {/* Winner 1 */}
                 <div className="flex gap-2">
                   <input className={field} list="players-dl" placeholder="בחר או הקלד שם שחקן..." value={awardsDraft[k1] || ''} onChange={(e) => setAwardsDraft({ ...awardsDraft, [k1]: e.target.value })} />
                   {awardsDraft[k1]?.trim() && (
@@ -1206,7 +1319,6 @@ function Admin() {
                   )}
                 </div>
 
-                {/* Winner 2 (Tied) */}
                 {hasSecond && (
                   <div className="flex gap-2 items-center pr-3 border-r-2 border-amber-400">
                     <input className={field} list="players-dl" placeholder="שחקן שני בתיקו..." value={awardsDraft[k2] || ''} onChange={(e) => setAwardsDraft({ ...awardsDraft, [k2]: e.target.value })} />
@@ -1259,7 +1371,6 @@ function Admin() {
         </section>
       )}
 
-      {/* Persistent Player Database (מאגר שחקנים קבוע) */}
       <section className="bg-white rounded-xl p-4 border border-stone-200 space-y-3">
         <div className="flex items-center justify-between">
           <div>
@@ -1341,13 +1452,13 @@ function Admin() {
           <div className="pt-2 border-t border-stone-200 space-y-1">
             <span className="text-sm font-bold">🔔 התראות Push לאייפון בהרשמה חדשה (ntfy)</span>
             <p className="text-xs text-stone-500">
-              הורד את אפליקציית <b>ntfy</b> מה-App Store, לחץ על <b>+</b> והירשם לערוץ סודי משלך (למשל: <code dir="ltr">weisgal-ilai-1709</code>), והזן את אותו שם כאן:
+              הזן בדיוק את שם הערוץ כפי שמופיע באפליקציית ntfy (למשל: <code dir="ltr">Weisgalilay1709</code>):
             </p>
             <div className="flex gap-2">
               <input
                 className={field}
                 dir="ltr"
-                placeholder="weisgal-ilai-1709"
+                placeholder="Weisgalilay1709"
                 value={draft.ntfy_topic || ''}
                 onChange={(e) => setDraft({ ...draft, ntfy_topic: e.target.value })}
               />
@@ -1364,7 +1475,7 @@ function Admin() {
       {next && (
         <form onSubmit={doReset} className="space-y-3 border-t border-stone-300 pt-5">
           <h2 className="text-xl font-bold">איפוס משחק לשבוע הבא</h2>
-          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ונתוני המחזור ומבטל פרסום קבוצות. הדירוגים, התפקידים, הקלפים ושחקן החודש נשמרים.</p>
+          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ונתוני המחזור ומבטל פרסום קבוצות ורשימת מאושרים. הדירוגים, התפקידים, הקלפים ושחקן החודש נשמרים.</p>
           {[['match_time', 'תאריך וזמן המשחק הבא'], ['price', 'מחיר (₪)'], ['bit_link', 'קישור Bit']].map(([k, label]) => (
             <label key={k} className="block"><span className="text-sm">{label}</span>
               <input className={field} value={next[k]} type={k === 'price' ? 'number' : 'text'}
