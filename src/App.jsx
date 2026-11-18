@@ -8,7 +8,6 @@ const fmtAvg = (sum, n) => (n ? (sum / n).toFixed(1) : '–')
 const HOURS_48 = 48 * 3600e3
 const MY_REGS_KEY = 'weisgal_my_reg_ids'
 
-// Strip accidental URL prefixes while preserving exact casing (ntfy topics are case-sensitive!)
 const cleanNtfyTopic = (raw) =>
   (raw || '').trim().replace(/^https?:\/\/ntfy\.sh\//i, '').replace(/^ntfy\.sh\//i, '').replace(/^\/+|\/+$/g, '')
 
@@ -32,26 +31,26 @@ const ROLE_POS = {
 }
 const STATS = [['pac', 'PAC'], ['sho', 'SHO'], ['pas', 'PAS'], ['dri', 'DRI'], ['def', 'DEF'], ['phy', 'PHY']]
 const PLAYSTYLES = [
-  ['Power Shot', '⚽', 'בעיטה חזקה (Power Shot+)'],
-  ['Finesse Shot', '🎯', 'בעיטה מסובבת (Finesse Shot+)'],
-  ['Quick Step', '🚀', 'צעד ראשון מהיר (Quick Step+)'],
-  ['Rapid', '💨', 'ספרינטר (Rapid+)'],
-  ['Incisive Pass', '📐', 'מסירת עומק (Incisive Pass+)'],
-  ['Tiki Taka', '🔄', 'טיקי טאקה (Tiki Taka+)'],
-  ['Technical', '🪄', 'טכניקה ודריבל (Technical+)'],
-  ['First Touch', '🧲', 'עצירה ראשונה (First Touch+)'],
-  ['Anticipate', '🛡️', 'חטיפה וקריאת משחק (Anticipate+)'],
-  ['Bruiser', '💪', 'פיזיות וכתף (Bruiser+)'],
-  ['Relentless', '🔋', 'כושר בלתי נגמר (Relentless+)'],
-  ['GK Reflexes', '🧤', 'רפלקסים בשער (GK Reflexes+)'],
+  ['Power Shot', '⚽', 'בעיטה חזקה (Power Shot)'],
+  ['Finesse Shot', '🎯', 'בעיטה מסובבת (Finesse Shot)'],
+  ['Quick Step', '🚀', 'צעד ראשון מהיר (Quick Step)'],
+  ['Rapid', '💨', 'ספרינטר (Rapid)'],
+  ['Incisive Pass', '📐', 'מסירת עומק (Incisive Pass)'],
+  ['Tiki Taka', '🔄', 'טיקי טאקה (Tiki Taka)'],
+  ['Technical', '🪄', 'טכניקה ודריבל (Technical)'],
+  ['First Touch', '🧲', 'עצירה ראשונה (First Touch)'],
+  ['Anticipate', '🛡️', 'חטיפה וקריאת משחק (Anticipate)'],
+  ['Bruiser', '💪', 'פיזיות וכתף (Bruiser)'],
+  ['Relentless', '🔋', 'כושר בלתי נגמר (Relentless)'],
+  ['GK Reflexes', '🧤', 'רפלקסים בשער (GK Reflexes)'],
 ]
 const psIcon = (key) => PLAYSTYLES.find(([k]) => k === key)?.[1] || '⚽'
 const psLabel = (key) => PLAYSTYLES.find(([k]) => k === key)?.[2] || key
 
 const DEFAULT_CARD = {
-  rating: 3, role: 'מאוזן', height_cm: 175,
+  rating: 3, role: 'מאוזן', height_cm: 175, ovr: null,
   pac: 70, sho: 70, pas: 70, dri: 70, def: 70, phy: 70,
-  photo_url: '', playstyle_plus: '', playstyles: [],
+  photo_url: '', playstyle_plus: '', playstyle_plus_2: '', playstyles: [],
   skill_moves: 3, weak_foot: 3,
 }
 
@@ -91,9 +90,9 @@ const AWARDS = [
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n) || lo)))
 const statAvg = (c) => STATS.reduce((s, [k]) => s + (Number(c[k]) || 40), 0) / 6
-const ovrOf = (c) => clamp(statAvg(c), 40, 99)
+// Uses manual OVR if set; otherwise falls back to average of the 6 stats
+const ovrOf = (c) => (c?.ovr != null && c.ovr !== '' ? clamp(c.ovr, 40, 99) : clamp(statAvg(c), 40, 99))
 const tierOf = (ovr) => (ovr >= 75 ? 'gold' : ovr >= 65 ? 'silver' : 'bronze')
-const ratingFromStats = (c) => Math.min(5, Math.max(1, Math.round((1 + 4 * ((statAvg(c) - 40) / 59)) * 2) / 2))
 
 function useLive() {
   const [settings, setSettings] = useState(null)
@@ -240,6 +239,7 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           </div>
         )}
 
+        {/* Primary Gold PlayStyle+ Diamond on the card */}
         {c.playstyle_plus && (
           <>
             <button
@@ -287,7 +287,7 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
                 style={{ background: 'rgba(15, 15, 15, 0.86)' }}
               >
                 <span className="ml-1">{psIcon(c.playstyle_plus)}</span>
-                <span>{psLabel(c.playstyle_plus)}</span>
+                <span>{psLabel(c.playstyle_plus)}+</span>
               </div>
             )}
           </>
@@ -381,6 +381,65 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
   )
 }
 
+/* ---------- FUT.GG Style PlayStyles Diamond Bar (Shown ONLY in Admin Editor) ---------- */
+function AdminPlaystylesRow({ plusList = [], grayList = [] }) {
+  const [selectedLabel, setSelectedLabel] = useState('')
+  const activePlus = plusList.filter(Boolean)
+  const activeGray = grayList.filter(Boolean)
+
+  if (activePlus.length === 0 && activeGray.length === 0) return null
+
+  return (
+    <div className="bg-stone-900 rounded-xl p-3 border border-stone-700 space-y-2 shadow-inner">
+      <div dir="ltr" className="flex items-center justify-center gap-3 flex-wrap py-1">
+        {/* Gold PlayStyle+ Diamonds (up to 2) */}
+        {activePlus.map((key, i) => (
+          <button
+            key={`ps-plus-${key}-${i}`}
+            type="button"
+            onClick={() => setSelectedLabel(`${psIcon(key)} ${psLabel(key)}+ (זהב)`)}
+            className="relative w-9 h-9 rotate-45 rounded-[6px] flex items-center justify-center shadow-md transition-transform active:scale-95 cursor-pointer"
+            style={{
+              background: 'linear-gradient(135deg,#fff3a6,#d8a832)',
+              border: '2px solid #2d2106',
+              color: '#2d2106',
+            }}
+          >
+            <div className="w-[82%] h-[82%] rounded-[3px] border border-[#2d2106] flex items-center justify-center">
+              <span className="-rotate-45 text-sm leading-none">{psIcon(key)}</span>
+            </div>
+            <span className="-rotate-45 absolute -top-1.5 -right-1.5 text-[9px] font-black leading-none px-1 py-0.5 rounded-sm bg-[#2d2106] text-[#fff7cc]">
+              +
+            </span>
+          </button>
+        ))}
+
+        {/* Gray/Silver Regular PlayStyles Diamonds */}
+        {activeGray.map((key, i) => (
+          <button
+            key={`ps-gray-${key}-${i}`}
+            type="button"
+            onClick={() => setSelectedLabel(`${psIcon(key)} ${psLabel(key)} (אפור)`)}
+            className="relative w-9 h-9 rotate-45 rounded-[6px] flex items-center justify-center shadow-md transition-transform active:scale-95 cursor-pointer"
+            style={{
+              background: 'linear-gradient(135deg,#f8fafc,#94a3b8)',
+              border: '2px solid #334155',
+              color: '#0f172a',
+            }}
+          >
+            <div className="w-[82%] h-[82%] rounded-[3px] border border-[#334155] flex items-center justify-center">
+              <span className="-rotate-45 text-sm leading-none">{psIcon(key)}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] text-center text-amber-200/90 font-medium">
+        {selectedLabel || 'תצוגת אדמין בלבד (לא מופיע באתר): לחץ על יהלום לראות את שמו'}
+      </p>
+    </div>
+  )
+}
+
 /* ---------- Public Page ---------- */
 function Player() {
   const { settings, confirmed, awards, featuredCards, knownNames } = useLive()
@@ -400,7 +459,6 @@ function Player() {
         setMyIds(getMyRegIds())
       }
 
-      // Fetch latest settings directly to guarantee ntfy_topic is always up to date
       const { data: freshSettings } = await supabase.from('match_settings').select('ntfy_topic').eq('id', 1).single()
       const topic = cleanNtfyTopic(freshSettings?.ntfy_topic || settings?.ntfy_topic)
       if (topic) {
@@ -439,7 +497,6 @@ function Player() {
   const bitEnabled = settings.bit_enabled !== false
   const myConfirmedPlayer = listPublished ? confirmed.find((p) => myIds.includes(p.id)) : null
 
-  // Smart one-click suggestions from known roster when user types >= 1 char
   const trimmedInput = name.trim()
   const confirmedSet = listPublished ? new Set(confirmed.map((p) => p.player_name)) : new Set()
   const quickSuggestions = trimmedInput.length >= 1
@@ -462,7 +519,6 @@ function Player() {
         </div>
       </section>
 
-      {/* Protected Bit Payment Section: Only visible AFTER admin publishes the list AND on the approved player's device */}
       {listPublished && bitEnabled && myConfirmedPlayer && !myConfirmedPlayer.is_paid && (
         <section className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-4 space-y-2 shadow-md">
           <p className="text-center font-extrabold text-stone-800">
@@ -522,7 +578,6 @@ function Player() {
         </section>
       )}
 
-      {/* Confirmed List: Shown ONLY when listPublished is true */}
       {listPublished ? (
         <section>
           <h2 className="text-xl font-bold mb-2">מגיעים מאושרים ({confirmed.length}/{CAP})</h2>
@@ -580,11 +635,14 @@ function Player() {
   )
 }
 
-/* ---------- Admin: FC Card Builder ---------- */
+/* ---------- Admin: FC Card Builder (With Manual OVR, 2x PS+ & Gray PlayStyles Bar) ---------- */
 function FcCardModal({ name, initial, onSave, onClose }) {
   const [c, setC] = useState({
     ...DEFAULT_CARD,
     ...initial,
+    ovr: initial?.ovr ?? null,
+    playstyle_plus_2: initial?.playstyle_plus_2 || '',
+    playstyles: Array.isArray(initial?.playstyles) ? initial.playstyles : [],
     skill_moves: initial?.skill_moves ?? 3,
     weak_foot: initial?.weak_foot ?? 3,
   })
@@ -597,6 +655,17 @@ function FcCardModal({ name, initial, onSave, onClose }) {
   const fileInputRef = useRef(null)
 
   const set = (k, v) => setC((x) => ({ ...x, [k]: v }))
+
+  const toggleGrayPlaystyle = (psKey) => {
+    setC((prev) => {
+      const list = Array.isArray(prev.playstyles) ? prev.playstyles : []
+      if (list.includes(psKey)) {
+        return { ...prev, playstyles: list.filter((x) => x !== psKey) }
+      }
+      if (list.length >= 6) return prev
+      return { ...prev, playstyles: [...list, psKey] }
+    })
+  }
 
   const onSelectFile = (e) => {
     const file = e.target.files?.[0]
@@ -654,10 +723,12 @@ function FcCardModal({ name, initial, onSave, onClose }) {
     const finalPhoto = renderCroppedDataUrl()
     const out = {
       ...c,
+      ovr: c.ovr != null && c.ovr !== '' ? clamp(c.ovr, 40, 99) : null,
       height_cm: clamp(c.height_cm, 150, 210),
       photo_url: finalPhoto,
       playstyle_plus: c.playstyle_plus || '',
-      playstyles: [],
+      playstyle_plus_2: c.playstyle_plus_2 || '',
+      playstyles: Array.isArray(c.playstyles) ? c.playstyles : [],
       skill_moves: clamp(c.skill_moves ?? 3, 1, 5),
       weak_foot: clamp(c.weak_foot ?? 3, 1, 5),
     }
@@ -699,10 +770,18 @@ function FcCardModal({ name, initial, onSave, onClose }) {
     </div>
   ) : null
 
+  const currentOvr = ovrOf(c)
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="bg-chalk w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl p-4 space-y-4" onClick={(e) => e.stopPropagation()}>
         <FutCard name={name} card={c} interactivePhoto={interactivePhotoNode} />
+
+        {/* FUT.GG-style PlayStyles Bar (Gold PS+ & Gray PlayStyles) - Admin Only */}
+        <AdminPlaystylesRow
+          plusList={[c.playstyle_plus, c.playstyle_plus_2]}
+          grayList={c.playstyles || []}
+        />
 
         <div className="bg-white rounded-xl p-3 border border-stone-200 space-y-2">
           <div className="flex gap-2 justify-center flex-wrap">
@@ -728,7 +807,44 @@ function FcCardModal({ name, initial, onSave, onClose }) {
           )}
         </div>
 
-        <p className="text-center text-sm text-stone-600">דירוג מחושב מהקלף: <b>{ratingFromStats(c)}</b> (נשמר בעת שמירת הקלף)</p>
+        {/* Independent Manual OVR Control (Does NOT affect 1-5 match rating or 6 stats) */}
+        <div className="bg-white rounded-xl p-3 border border-stone-200 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-extrabold text-stone-800">אוברול (OVR) על הקלף</span>
+            {c.ovr != null && (
+              <button
+                type="button"
+                onClick={() => set('ovr', null)}
+                className="text-xs text-pitch underline font-bold"
+              >
+                אפס לחישוב אוטומטי ({clamp(statAvg(c), 40, 99)})
+              </button>
+            )}
+          </div>
+          <label className="flex items-center gap-2">
+            <span className="w-10 text-sm font-bold" dir="ltr">OVR</span>
+            <input
+              type="range"
+              min="40"
+              max="99"
+              value={currentOvr}
+              onChange={(e) => set('ovr', Number(e.target.value))}
+              className="flex-1"
+            />
+            <input
+              type="number"
+              min="40"
+              max="99"
+              value={currentOvr}
+              className={input}
+              onChange={(e) => set('ovr', e.target.value === '' ? '' : Number(e.target.value))}
+              onBlur={() => set('ovr', clamp(currentOvr, 40, 99))}
+            />
+          </label>
+          <p className="text-[11px] text-stone-500">
+            * עצמאי לחלוטין: לא משנה את הסטטים למטה ולא משנה את הדירוג (1–5) לחלוקת הכוחות.
+          </p>
+        </div>
 
         {STATS.map(([k, label]) => (
           <label key={k} className="flex items-center gap-2">
@@ -752,6 +868,7 @@ function FcCardModal({ name, initial, onSave, onClose }) {
           </select>
         </label>
 
+        {/* Skill Moves, Weak Foot, 2x PlayStyle+ (Gold) & Gray PlayStyles */}
         <div className="bg-white rounded-xl p-3 border border-stone-200 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -795,19 +912,60 @@ function FcCardModal({ name, initial, onSave, onClose }) {
             </div>
           </div>
 
-          <label className="block pt-1 border-t border-stone-100">
-            <span className="text-sm font-bold text-amber-800">◆ PlayStyle+ (לחיצה על היהלום בקלף מציגה את השם)</span>
-            <select
-              value={c.playstyle_plus || ''}
-              onChange={(e) => set('playstyle_plus', e.target.value)}
-              className="mt-1 w-full rounded border border-stone-300 bg-white px-2 py-2 text-sm font-medium"
-            >
-              <option value="">ללא PlayStyle+</option>
-              {PLAYSTYLES.map(([k, ico, label]) => (
-                <option key={k} value={k}>{ico} {label}</option>
-              ))}
-            </select>
-          </label>
+          <div className="pt-2 border-t border-stone-100 space-y-2">
+            <label className="block">
+              <span className="text-xs font-bold text-amber-800">◆ PlayStyle+ ראשי (זהב — מופיע על הקלף וגם למטה)</span>
+              <select
+                value={c.playstyle_plus || ''}
+                onChange={(e) => set('playstyle_plus', e.target.value)}
+                className="mt-1 w-full rounded border border-stone-300 bg-white px-2 py-2 text-sm font-medium"
+              >
+                <option value="">ללא PlayStyle+ ראשי</option>
+                {PLAYSTYLES.map(([k, ico, label]) => (
+                  <option key={k} value={k}>{ico} {label}+</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="text-xs font-bold text-amber-800">◆ PlayStyle+ שני (זהב — מופיע רק בשורה למטה באדמין)</span>
+              <select
+                value={c.playstyle_plus_2 || ''}
+                onChange={(e) => set('playstyle_plus_2', e.target.value)}
+                className="mt-1 w-full rounded border border-stone-300 bg-white px-2 py-2 text-sm font-medium"
+              >
+                <option value="">ללא PlayStyle+ שני</option>
+                {PLAYSTYLES.map(([k, ico, label]) => (
+                  <option key={k} value={k}>{ico} {label}+</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="pt-2 border-t border-stone-100 space-y-1.5">
+            <span className="block text-xs font-bold text-stone-700">
+              ◇ PlayStyles רגילים באפור (עד 6 — מופיעים רק בשורה למטה באדמין)
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {PLAYSTYLES.map(([k, ico, label]) => {
+                const selected = (c.playstyles || []).includes(k)
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => toggleGrayPlaystyle(k)}
+                    className={`rounded-lg px-2 py-1 text-xs font-bold border transition ${
+                      selected
+                        ? 'bg-slate-700 text-white border-slate-900'
+                        : 'bg-stone-100 text-stone-700 border-stone-300'
+                    }`}
+                  >
+                    {ico} {label.replace(/\s*\(.*\)/, '')}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         </div>
 
         <div className="flex gap-2">
@@ -951,12 +1109,29 @@ function Admin() {
       await rpc('admin_set_player_card', {
         p_pin: pin, p_name: name, p_role: c.role, p_height_cm: c.height_cm,
         p_pac: c.pac, p_sho: c.sho, p_pas: c.pas, p_dri: c.dri, p_def: c.def, p_phy: c.phy,
-        p_photo_url: c.photo_url || '', p_playstyle_plus: c.playstyle_plus || '', p_playstyles: [],
-        p_skill_moves: c.skill_moves ?? 3, p_weak_foot: c.weak_foot ?? 3,
+        p_photo_url: c.photo_url || '',
+        p_playstyle_plus: c.playstyle_plus || '',
+        p_playstyle_plus_2: c.playstyle_plus_2 || '',
+        p_playstyles: Array.isArray(c.playstyles) ? c.playstyles : [],
+        p_skill_moves: c.skill_moves ?? 3,
+        p_weak_foot: c.weak_foot ?? 3,
+        p_ovr: c.ovr != null && c.ovr !== '' ? clamp(c.ovr, 40, 99) : null,
       })
       await refresh()
       setCardFor(null)
     } catch { alert('שמירת הקלף נכשלה') }
+  }
+
+  const renameRegistration = async (r) => {
+    const nextName = prompt('הזן שם מתוקן לנרשם (אם השם קיים במאגר, הדירוג והקלף יקושרו אוטומטית):', r.player_name)
+    if (!nextName || nextName.trim() === r.player_name || nextName.trim().length < 2) return
+    await act('admin_rename_registration', { p_id: r.id, p_new_name: nextName.trim() })()
+  }
+
+  const renameRosterPlayer = async (oldName) => {
+    const nextName = prompt('הזן שם חדש לשחקן במאגר (אם השם כבר קיים, הנתונים יאוחדו):', oldName)
+    if (!nextName || nextName.trim() === oldName || nextName.trim().length < 2) return
+    await act('admin_rename_player_rating', { p_old_name: oldName, p_new_name: nextName.trim() })()
   }
 
   const addManualPlayer = (targetStatus) => async () => {
@@ -1124,7 +1299,17 @@ function Admin() {
       <ul className="divide-y divide-stone-200 bg-white rounded-lg">
         {items.map((r) => (
           <li key={r.id} className="px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="font-medium">{r.player_name}</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-medium">{r.player_name}</span>
+              <button
+                type="button"
+                onClick={() => renameRegistration(r)}
+                title="ערוך שם נרשם"
+                className="text-xs text-stone-500 hover:text-stone-900 px-1.5 py-0.5 rounded bg-stone-100 border border-stone-200"
+              >
+                ✏️
+              </button>
+            </div>
             <div className="flex gap-2 items-center flex-wrap">{children(r)}</div>
           </li>
         ))}
@@ -1140,12 +1325,10 @@ function Admin() {
 
   return (
     <Shell title="ניהול משחק">
-      {/* Quick Control Bar: Blind Draft List Publish, Registration Open/Close & Bit Visibility */}
       {draft && (
         <section className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm space-y-3">
           <h2 className="text-lg font-extrabold">בקרה מהירה (סינון, פרסום רשימה ו-Bit)</h2>
 
-          {/* Main Blind Draft Toggle */}
           <button
             type="button"
             onClick={toggleListPublished}
@@ -1191,7 +1374,6 @@ function Admin() {
         </section>
       )}
 
-      {/* Manual Player Addition in Admin */}
       <section className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm space-y-2">
         <h2 className="text-lg font-extrabold">➕ הוספת שחקן ידנית למשחק</h2>
         <div className="flex gap-2 flex-wrap">
@@ -1375,7 +1557,7 @@ function Admin() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold">מאגר שחקנים ודירוגים קבוע ({Object.keys(ratings).length})</h2>
-            <p className="text-xs text-stone-500">ערוך דירוגים, תפקידים וקלפי FC של כל השחקנים בכל זמן, או הוסף שחקנים חדשים מראש.</p>
+            <p className="text-xs text-stone-500">ערוך שמות, דירוגים, תפקידים וקלפי FC של כל השחקנים בכל זמן, או הוסף שחקנים חדשים מראש.</p>
           </div>
           <button
             type="button"
@@ -1417,7 +1599,17 @@ function Admin() {
                       </span>
                     )}
                     <div>
-                      <div className="font-bold text-sm">{pName}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-sm">{pName}</span>
+                        <button
+                          type="button"
+                          onClick={() => renameRosterPlayer(pName)}
+                          title="ערוך שם במאגר"
+                          className="text-[11px] text-stone-500 hover:text-stone-900 px-1.5 py-0.5 rounded bg-stone-100 border border-stone-200"
+                        >
+                          ✏️
+                        </button>
+                      </div>
                       <div className="text-[11px] text-stone-500">OVR {ovrOf(cardOf(pName))} · {cardOf(pName).height_cm} ס"מ</div>
                     </div>
                   </div>
