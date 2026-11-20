@@ -6,6 +6,7 @@ const CAP = 15
 const RATING_STEPS = Array.from({ length: 9 }, (_, i) => 1 + i / 2)
 const fmtAvg = (sum, n) => (n ? (sum / n).toFixed(1) : '–')
 const MY_REGS_KEY = 'weisgal_my_reg_ids'
+const PUBLIC_LIVE_GAMES_KEY = 'weisgal_public_live_games'
 
 const cleanNtfyTopic = (raw) =>
   (raw || '').trim().replace(/^https?:\/\/ntfy\.sh\//i, '').replace(/^ntfy\.sh\//i, '').replace(/^\/+|\/+$/g, '')
@@ -18,6 +19,13 @@ const saveMyRegId = (id) => {
     const cur = getMyRegIds()
     if (id && !cur.includes(id)) localStorage.setItem(MY_REGS_KEY, JSON.stringify([...cur, id]))
   } catch { /* ignore */ }
+}
+
+const getPublicLiveGames = () => {
+  try { return JSON.parse(localStorage.getItem(PUBLIC_LIVE_GAMES_KEY) || '[]') } catch { return [] }
+}
+const savePublicLiveGames = (games) => {
+  try { localStorage.setItem(PUBLIC_LIVE_GAMES_KEY, JSON.stringify(games)) } catch { /* ignore */ }
 }
 
 const ROLES = ['מאוזן', 'הגנה / שוער', 'קישור / פליימייקר', 'התקפה / סקורר', 'כושר / רץ']
@@ -570,7 +578,7 @@ function MatchdayTables({ games, colors }) {
   )
 }
 
-/* ---------- Sortable All-Time Roster Table (All Roster Players + Clickable Columns) ---------- */
+/* ---------- Sortable All-Time Roster Table ---------- */
 const ALLTIME_COLS = [
   { key: 'player_name', label: 'שחקן', align: 'text-right' },
   { key: 'total_goals', label: '⚽ גולים', align: 'text-center' },
@@ -584,7 +592,7 @@ const ALLTIME_COLS = [
 
 function AllTimeTable({ stats }) {
   const [sortBy, setSortBy] = useState('total_goals')
-  const [sortDir, setSortDir] = useState('desc') // 'desc' | 'asc'
+  const [sortDir, setSortDir] = useState('desc')
 
   const handleSort = (colKey) => {
     if (sortBy === colKey) {
@@ -741,6 +749,9 @@ function Player() {
     ? knownNames.filter((n) => n.includes(trimmedInput) && !confirmedSet.has(n)).slice(0, 5)
     : []
 
+  const publicGames = getPublicLiveGames()
+  const displayLiveGames = liveGames.length > 0 ? liveGames : publicGames
+
   return (
     <Shell title={settings.title || 'כדורגל וייסגל'}>
       <section className="bg-white/90 rounded-2xl shadow-md px-4 py-5 text-center space-y-3">
@@ -853,9 +864,9 @@ function Player() {
         </section>
       )}
 
-      {settings.live_stats_published && liveGames.length > 0 && (
+      {settings.live_stats_published && displayLiveGames.length > 0 && (
         <section className="space-y-3">
-          <MatchdayTables games={liveGames} colors={settings.team_colors || []} />
+          <MatchdayTables games={displayLiveGames} colors={settings.team_colors || []} />
         </section>
       )}
 
@@ -924,6 +935,9 @@ function LivePitchPage() {
   const [penaltiesOpen, setPenaltiesOpen] = useState(false)
   const [penRounds, setPenRounds] = useState([{ a: null, b: null }])
   const [savingGame, setSavingGame] = useState(false)
+  const [publicGames, setPublicGames] = useState(() => getPublicLiveGames())
+
+  const isPublicLive = Boolean(settings?.live_page_published)
 
   const login = async (e) => {
     e?.preventDefault()
@@ -976,11 +990,12 @@ function LivePitchPage() {
   const nameA = colors[teamA] || `קבוצה ${teamA + 1}`
   const nameB = colors[teamB] || `קבוצה ${teamB + 1}`
 
-  // Exact per-team goal counts matching the selected team indices (teamA vs teamB)
   const scoreA = events.filter((e) => e.type === 'goal' && Number(e.team) === Number(teamA)).length
   const scoreB = events.filter((e) => e.type === 'goal' && Number(e.team) === Number(teamB)).length
   const penScoreA = penRounds.filter((r) => r.a === true).length
   const penScoreB = penRounds.filter((r) => r.b === true).length
+
+  const activeGamesList = authed ? liveGames : (liveGames.length > 0 ? liveGames : publicGames)
 
   const moveOrAddPlayerToTeam = (targetTeam, rawName) => {
     const clean = (rawName || '').trim()
@@ -1051,19 +1066,39 @@ function LivePitchPage() {
     if (!confirm(summary)) return
     setSavingGame(true)
     try {
-      await rpc('admin_record_live_game', {
-        p_pin: pin,
-        p_team_a: teamA,
-        p_team_b: teamB,
-        p_score_a: scoreA,
-        p_score_b: scoreB,
-        p_pen_a: penaltiesOpen ? penScoreA : 0,
-        p_pen_b: penaltiesOpen ? penScoreB : 0,
-        p_winner_team: winner,
-        p_events: events.map(({ type, scorer, assist, team }) => ({ type, scorer, assist, team })),
-        p_lineups: { a: rosters[teamA] || [], b: rosters[teamB] || [] },
-      })
-      await reload()
+      const cleanEvents = events.map(({ type, scorer, assist, team }) => ({ type, scorer, assist, team }))
+      if (authed) {
+        await rpc('admin_record_live_game', {
+          p_pin: pin,
+          p_team_a: teamA,
+          p_team_b: teamB,
+          p_score_a: scoreA,
+          p_score_b: scoreB,
+          p_pen_a: penaltiesOpen ? penScoreA : 0,
+          p_pen_b: penaltiesOpen ? penScoreB : 0,
+          p_winner_team: winner,
+          p_events: cleanEvents,
+          p_lineups: { a: rosters[teamA] || [], b: rosters[teamB] || [] },
+        })
+        await reload()
+      } else {
+        const nextGame = {
+          id: crypto.randomUUID(),
+          team_a: teamA,
+          team_b: teamB,
+          score_a: scoreA,
+          score_b: scoreB,
+          pen_a: penaltiesOpen ? penScoreA : 0,
+          pen_b: penaltiesOpen ? penScoreB : 0,
+          winner_team: winner,
+          events: cleanEvents,
+          created_at: new Date().toISOString(),
+        }
+        const updated = [...publicGames, nextGame]
+        setPublicGames(updated)
+        savePublicLiveGames(updated)
+      }
+
       setEvents([])
       setPenaltiesOpen(false)
       setPenRounds([{ a: null, b: null }])
@@ -1083,14 +1118,21 @@ function LivePitchPage() {
   }
 
   const deleteSavedGame = async (gameId) => {
-    if (!confirm('למחוק את המשחקון הזה ולעדכן מחדש את הסטטיסטיקות?')) return
-    try {
-      await rpc('admin_delete_live_game', { p_pin: pin, p_id: gameId })
-      await reload()
-    } catch { alert('מחיקת המשחקון נכשלה') }
+    if (!confirm('למחוק את המשחקון הזה?')) return
+    if (authed) {
+      try {
+        await rpc('admin_delete_live_game', { p_pin: pin, p_id: gameId })
+        await reload()
+      } catch { alert('מחיקת המשחקון נכשלה') }
+    } else {
+      const updated = publicGames.filter((g) => g.id !== gameId)
+      setPublicGames(updated)
+      savePublicLiveGames(updated)
+    }
   }
 
   const togglePublishStats = async (patch) => {
+    if (!authed) return
     try {
       await rpc('admin_publish_stats', {
         p_pin: pin,
@@ -1101,7 +1143,9 @@ function LivePitchPage() {
     } catch { alert('עדכון הפרסום נכשל') }
   }
 
-  if (!authed) return (
+  if (!settings) return <Shell title="טוען…" />
+
+  if (!authed && !isPublicLive) return (
     <Shell title="ניהול משחק חי">
       <form onSubmit={login} className="space-y-3">
         <label htmlFor="p" className="block font-medium">קוד מנהל</label>
@@ -1121,11 +1165,11 @@ function LivePitchPage() {
     <div className="min-h-screen bg-stone-950 text-white pb-10">
       <header className="bg-pitch text-chalk px-4 py-4 shadow-lg">
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-2">
-          <a href="/admin" className="rounded-lg bg-black/25 px-3 py-1.5 text-sm font-bold hover:bg-black/40">
-            → חזרה לניהול
+          <a href="/" className="rounded-lg bg-black/25 px-3 py-1.5 text-sm font-bold hover:bg-black/40">
+            → חזרה לעמוד הראשי
           </a>
-          <h1 className="text-xl font-black">⚽ ניהול מחזור חי</h1>
-          <span className="text-xs opacity-80">{liveGames.length} משחקונים</span>
+          <h1 className="text-xl font-black">⚽ משחק חי</h1>
+          <span className="text-xs opacity-80">{activeGamesList.length} משחקונים</span>
         </div>
       </header>
 
@@ -1142,7 +1186,6 @@ function LivePitchPage() {
           </div>
 
           <div className="relative z-10 bg-stone-950/90 backdrop-blur-md rounded-2xl border border-white/20 p-3 space-y-3 shadow-xl">
-            {/* Explicit LTR score row: Left = Team A score, Right = Team B score with clear team names */}
             <div dir="ltr" className="grid grid-cols-3 items-center text-center gap-2">
               <div className="space-y-1">
                 <select
@@ -1476,48 +1519,50 @@ function LivePitchPage() {
           </div>
         )}
 
-        <section className="bg-stone-900 rounded-2xl p-4 border border-stone-700 space-y-3">
-          <h2 className="text-base font-extrabold text-amber-300">📢 פרסום טבלאות לעמוד הראשי של השחקנים</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => togglePublishStats({ live: !settings?.live_stats_published })}
-              className={`rounded-xl py-3 px-3 font-extrabold text-xs sm:text-sm border ${
-                settings?.live_stats_published
-                  ? 'bg-green-700 text-white border-green-500'
-                  : 'bg-stone-800 text-stone-200 border-stone-600'
-              }`}
-            >
-              {settings?.live_stats_published
-                ? '👁️ טבלת המחזור מפורסמת (לחץ להסתרה)'
-                : '🙈 פרסם טבלת מחזור (מנצחת + שערים/בישולים)'}
-            </button>
+        {authed && (
+          <section className="bg-stone-900 rounded-2xl p-4 border border-stone-700 space-y-3">
+            <h2 className="text-base font-extrabold text-amber-300">📢 פרסום טבלאות לעמוד הראשי של השחקנים</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => togglePublishStats({ live: !settings?.live_stats_published })}
+                className={`rounded-xl py-3 px-3 font-extrabold text-xs sm:text-sm border ${
+                  settings?.live_stats_published
+                    ? 'bg-green-700 text-white border-green-500'
+                    : 'bg-stone-800 text-stone-200 border-stone-600'
+                }`}
+              >
+                {settings?.live_stats_published
+                  ? '👁️ טבלת המחזור מפורסמת (לחץ להסתרה)'
+                  : '🙈 פרסם טבלת מחזור (מנצחת + שערים/בישולים)'}
+              </button>
 
-            <button
-              type="button"
-              onClick={() => togglePublishStats({ alltime: !settings?.alltime_stats_published })}
-              className={`rounded-xl py-3 px-3 font-extrabold text-xs sm:text-sm border ${
-                settings?.alltime_stats_published
-                  ? 'bg-purple-800 text-white border-purple-500'
-                  : 'bg-stone-800 text-stone-200 border-stone-600'
-              }`}
-            >
-              {settings?.alltime_stats_published
-                ? '👁️ טבלת שיאים כללית מפורסמת (לחץ להסתרה)'
-                : '📊 פרסם טבלת שיאים וסטטיסטיקה כללית'}
-            </button>
-          </div>
-        </section>
+              <button
+                type="button"
+                onClick={() => togglePublishStats({ alltime: !settings?.alltime_stats_published })}
+                className={`rounded-xl py-3 px-3 font-extrabold text-xs sm:text-sm border ${
+                  settings?.alltime_stats_published
+                    ? 'bg-purple-800 text-white border-purple-500'
+                    : 'bg-stone-800 text-stone-200 border-stone-600'
+                }`}
+              >
+                {settings?.alltime_stats_published
+                  ? '👁️ טבלת שיאים כללית מפורסמת (לחץ להסתרה)'
+                  : '📊 פרסם טבלת שיאים וסטטיסטיקה כללית'}
+              </button>
+            </div>
+          </section>
+        )}
 
         <div className="text-stone-950">
-          <MatchdayTables games={liveGames} colors={colors} />
+          <MatchdayTables games={activeGamesList} colors={colors} />
         </div>
 
-        {liveGames.length > 0 && (
+        {activeGamesList.length > 0 && (
           <section className="bg-stone-900 rounded-2xl p-4 border border-stone-700 space-y-2">
-            <h3 className="text-sm font-extrabold text-stone-200">היסטוריית משחקונים היום ({liveGames.length})</h3>
+            <h3 className="text-sm font-extrabold text-stone-200">היסטוריית משחקונים היום ({activeGamesList.length})</h3>
             <ul className="divide-y divide-stone-800 text-xs">
-              {liveGames.map((g, i) => (
+              {activeGamesList.map((g, i) => (
                 <li key={g.id} className="py-2 flex items-center justify-between gap-2">
                   <div>
                     <span className="text-stone-400 ml-2">#{i + 1}</span>
