@@ -5,7 +5,6 @@ import { balance } from './balance'
 const CAP = 15
 const RATING_STEPS = Array.from({ length: 9 }, (_, i) => 1 + i / 2)
 const fmtAvg = (sum, n) => (n ? (sum / n).toFixed(1) : '–')
-const HOURS_48 = 48 * 3600e3
 const MY_REGS_KEY = 'weisgal_my_reg_ids'
 
 const cleanNtfyTopic = (raw) =>
@@ -90,9 +89,58 @@ const AWARDS = [
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n) || lo)))
 const statAvg = (c) => STATS.reduce((s, [k]) => s + (Number(c[k]) || 40), 0) / 6
-// Uses manual OVR if set; otherwise falls back to average of the 6 stats
 const ovrOf = (c) => (c?.ovr != null && c.ovr !== '' ? clamp(c.ovr, 40, 99) : clamp(statAvg(c), 40, 99))
 const tierOf = (ovr) => (ovr >= 75 ? 'gold' : ovr >= 65 ? 'silver' : 'bronze')
+
+function computeMatchdayAggregates(games, colors = []) {
+  const playerMap = {}
+  const ensureP = (name) => {
+    if (!playerMap[name]) playerMap[name] = { name, goals: 0, assists: 0 }
+    return playerMap[name]
+  }
+  const teamStats = [0, 1, 2].map((idx) => ({
+    idx,
+    name: colors[idx] || `קבוצה ${idx + 1}`,
+    played: 0,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    gf: 0,
+    ga: 0,
+    pts: 0,
+  }))
+
+  for (const g of games || []) {
+    const a = teamStats[g.team_a]
+    const b = teamStats[g.team_b]
+    if (a && b) {
+      a.played += 1; b.played += 1
+      a.gf += Number(g.score_a) || 0; a.ga += Number(g.score_b) || 0
+      b.gf += Number(g.score_b) || 0; b.ga += Number(g.score_a) || 0
+      if (g.winner_team === g.team_a) {
+        a.wins += 1; a.pts += 3; b.losses += 1
+      } else if (g.winner_team === g.team_b) {
+        b.wins += 1; b.pts += 3; a.losses += 1
+      } else {
+        a.draws += 1; a.pts += 1; b.draws += 1; b.pts += 1
+      }
+    }
+    for (const ev of g.events || []) {
+      const sc = (ev.scorer || '').trim()
+      const as = (ev.assist || '').trim()
+      if (ev.type === 'goal' && sc) ensureP(sc).goals += 1
+      if (as) ensureP(as).assists += 1
+    }
+  }
+
+  const players = Object.values(playerMap).sort(
+    (x, y) => (y.goals + y.assists) - (x.goals + x.assists) || y.goals - x.goals || x.name.localeCompare(y.name, 'he')
+  )
+  const teams = [...teamStats].sort(
+    (x, y) => y.wins - x.wins || y.pts - x.pts || (y.gf - y.ga) - (x.gf - x.ga) || y.gf - x.gf
+  )
+  return { players, teams }
+}
 
 function useLive() {
   const [settings, setSettings] = useState(null)
@@ -100,21 +148,27 @@ function useLive() {
   const [awards, setAwards] = useState(null)
   const [featuredCards, setFeaturedCards] = useState({})
   const [knownNames, setKnownNames] = useState([])
+  const [liveGames, setLiveGames] = useState([])
+  const [allTimeStats, setAllTimeStats] = useState([])
 
   const load = useCallback(async () => {
     await supabase.rpc('expire_unpaid')
-    const [s, r, a, fc, kn] = await Promise.all([
+    const [s, r, a, fc, kn, lg, at] = await Promise.all([
       supabase.from('match_settings').select('*').eq('id', 1).single(),
       supabase.from('registrations').select('*').eq('status', 'confirmed').order('approved_at'),
       supabase.from('matchweek_awards').select('*').eq('id', 1).maybeSingle(),
       supabase.rpc('get_featured_cards').then((res) => res.data || [], () => []),
       supabase.rpc('public_get_player_names').then((res) => res.data || [], () => []),
+      supabase.from('matchweek_games').select('*').order('created_at', { ascending: true }).then((res) => res.data || [], () => []),
+      supabase.rpc('public_get_alltime_stats').then((res) => res.data || [], () => []),
     ])
     if (s.data) setSettings(s.data)
     if (r.data) setConfirmed(r.data)
     setAwards(a.data || null)
     if (fc) setFeaturedCards(Object.fromEntries(fc.map((x) => [x.player_name, x])))
     if (kn) setKnownNames(kn)
+    if (lg) setLiveGames(lg)
+    if (at) setAllTimeStats(at)
   }, [])
 
   useEffect(() => {
@@ -123,17 +177,19 @@ function useLive() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'match_settings' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'registrations' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'matchweek_awards' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matchweek_games' }, load)
       .subscribe()
     const poll = setInterval(load, 20000)
     return () => { supabase.removeChannel(ch); clearInterval(poll) }
   }, [load])
-  return { settings, confirmed, awards, featuredCards, knownNames, reload: load }
+  return { settings, confirmed, awards, featuredCards, knownNames, liveGames, allTimeStats, reload: load }
 }
 
-function Countdown({ since }) {
+function Countdown({ since, hours = 48 }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t) }, [])
-  const left = new Date(since).getTime() + HOURS_48 - now
+  if (!hours || hours <= 0) return <span className="text-stone-500">ללא הגבלת זמן</span>
+  const left = new Date(since).getTime() + hours * 3600e3 - now
   if (left <= 0) return <span className="text-red-700">פג תוקף</span>
   const h = Math.floor(left / 3.6e6), m = Math.floor((left % 3.6e6) / 6e4), s = Math.floor((left % 6e4) / 1e3)
   const pad = (n) => String(n).padStart(2, '0')
@@ -239,7 +295,6 @@ function FutCard({ name, card, variant = 'auto', boost = 0, compact = false, int
           </div>
         )}
 
-        {/* Primary Gold PlayStyle+ Diamond on the card */}
         {c.playstyle_plus && (
           <>
             <button
@@ -392,7 +447,6 @@ function AdminPlaystylesRow({ plusList = [], grayList = [] }) {
   return (
     <div className="bg-stone-900 rounded-xl p-3 border border-stone-700 space-y-2 shadow-inner">
       <div dir="ltr" className="flex items-center justify-center gap-3 flex-wrap py-1">
-        {/* Gold PlayStyle+ Diamonds (up to 2) */}
         {activePlus.map((key, i) => (
           <button
             key={`ps-plus-${key}-${i}`}
@@ -414,7 +468,6 @@ function AdminPlaystylesRow({ plusList = [], grayList = [] }) {
           </button>
         ))}
 
-        {/* Gray/Silver Regular PlayStyles Diamonds */}
         {activeGray.map((key, i) => (
           <button
             key={`ps-gray-${key}-${i}`}
@@ -440,9 +493,123 @@ function AdminPlaystylesRow({ plusList = [], grayList = [] }) {
   )
 }
 
+/* ---------- Shared Stats Tables (Matchday & All-Time) ---------- */
+function MatchdayTables({ games, colors }) {
+  const { players, teams } = computeMatchdayAggregates(games, colors)
+  if (!games || games.length === 0) return null
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-sm">
+        <div className="bg-pitch text-chalk px-4 py-2.5 font-extrabold text-base flex justify-between items-center">
+          <span>🏆 טבלת קבוצות המחזור ({games.length} משחקונים)</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-center">
+            <thead className="bg-stone-100 text-stone-700 font-bold border-b border-stone-200">
+              <tr>
+                <th className="py-2 px-3 text-right">קבוצה</th>
+                <th className="py-2 px-2">מש׳</th>
+                <th className="py-2 px-2">נצ׳</th>
+                <th className="py-2 px-2">תיקו</th>
+                <th className="py-2 px-2">הפ׳</th>
+                <th className="py-2 px-2">הפרש</th>
+                <th className="py-2 px-2">נק׳</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-200">
+              {teams.map((t, idx) => (
+                <tr key={t.idx} className={idx === 0 && t.played > 0 ? 'bg-amber-50/70 font-bold' : ''}>
+                  <td className="py-2 px-3 text-right flex items-center gap-2">
+                    <span className="w-3.5 h-3.5 rounded-full border border-stone-400 shrink-0" style={{ background: CSS_COLORS[t.name] || '#57534e' }} />
+                    <span>{t.name}</span>
+                  </td>
+                  <td className="py-2 px-2">{t.played}</td>
+                  <td className="py-2 px-2 text-green-700 font-bold">{t.wins}</td>
+                  <td className="py-2 px-2">{t.draws}</td>
+                  <td className="py-2 px-2 text-red-700">{t.losses}</td>
+                  <td className="py-2 px-2" dir="ltr">{t.gf - t.ga > 0 ? `+${t.gf - t.ga}` : t.gf - t.ga}</td>
+                  <td className="py-2 px-2 font-black">{t.pts}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {players.length > 0 && (
+        <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-sm">
+          <div className="bg-stone-800 text-white px-4 py-2.5 font-extrabold text-base">
+            ⚽ מלכי השערים והבישולים של המחזור
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-center">
+              <thead className="bg-stone-100 text-stone-700 font-bold border-b border-stone-200">
+                <tr>
+                  <th className="py-2 px-3 text-right">שחקן</th>
+                  <th className="py-2 px-2">⚽ שערים</th>
+                  <th className="py-2 px-2">🎯 בישולים</th>
+                  <th className="py-2 px-2">סה״כ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-200">
+                {players.map((p, idx) => (
+                  <tr key={p.name} className={idx === 0 ? 'bg-amber-50/60 font-bold' : ''}>
+                    <td className="py-2 px-3 text-right font-medium">{p.name}</td>
+                    <td className="py-2 px-2 font-bold text-pitch">{p.goals}</td>
+                    <td className="py-2 px-2 font-bold text-amber-700">{p.assists}</td>
+                    <td className="py-2 px-2 font-black">{p.goals + p.assists}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AllTimeTable({ stats }) {
+  if (!stats || stats.length === 0) return null
+  return (
+    <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-sm">
+      <div className="bg-stone-900 text-amber-200 px-4 py-2.5 font-extrabold text-base">
+        📊 טבלת שיאים וסטטיסטיקה כללית (כל הזמנים)
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs sm:text-sm text-center">
+          <thead className="bg-stone-100 text-stone-700 font-bold border-b border-stone-200">
+            <tr>
+              <th className="py-2 px-2.5 text-right">שחקן</th>
+              <th className="py-2 px-1.5" title="שערים">⚽</th>
+              <th className="py-2 px-1.5" title="בישולים">🎯</th>
+              <th className="py-2 px-1.5" title="מלך שערים">👑</th>
+              <th className="py-2 px-1.5" title="כוכב המחזור">⭐</th>
+              <th className="py-2 px-1.5" title="שער המחזור">🥅</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-200">
+            {stats.map((s) => (
+              <tr key={s.player_name} className="hover:bg-stone-50">
+                <td className="py-2 px-2.5 text-right font-bold">{s.player_name}</td>
+                <td className="py-2 px-1.5 font-extrabold text-pitch">{s.total_goals}</td>
+                <td className="py-2 px-1.5 font-extrabold text-amber-700">{s.total_assists}</td>
+                <td className="py-2 px-1.5">{s.awards_top_scorer || '–'}</td>
+                <td className="py-2 px-1.5">{s.awards_mvp || '–'}</td>
+                <td className="py-2 px-1.5">{s.awards_goal_of_week || '–'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 /* ---------- Public Page ---------- */
 function Player() {
-  const { settings, confirmed, awards, featuredCards, knownNames } = useLive()
+  const { settings, confirmed, awards, featuredCards, knownNames, liveGames, allTimeStats } = useLive()
   const [name, setName] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -495,6 +662,7 @@ function Player() {
   const listPublished = Boolean(settings.list_published)
   const regOpen = settings.registration_open !== false
   const bitEnabled = settings.bit_enabled !== false
+  const timeoutHours = Number(settings.payment_timeout_hours ?? 48)
   const myConfirmedPlayer = listPublished ? confirmed.find((p) => myIds.includes(p.id)) : null
 
   const trimmedInput = name.trim()
@@ -587,7 +755,11 @@ function Player() {
               <li key={p.id} className="flex justify-between px-3 py-2">
                 <span className="font-medium">{p.player_name}</span>
                 <span className={p.is_paid ? 'text-green-700 font-bold' : 'text-stone-500'}>
-                  {p.is_paid ? 'שולם ✓' : <>לא שולם · <Countdown since={p.approved_at} /></>}
+                  {p.is_paid ? 'שולם ✓' : (
+                    timeoutHours > 0
+                      ? <>לא שולם · <Countdown since={p.approved_at} hours={timeoutHours} /></>
+                      : 'לא שולם'
+                  )}
                 </span>
               </li>
             ))}
@@ -597,6 +769,13 @@ function Player() {
         <section className="bg-white/90 rounded-2xl border border-stone-200 p-4 text-center space-y-1 shadow-sm">
           <div className="text-base font-extrabold text-stone-800">📋 רשימת המגיעים טרם פורסמה</div>
           <p className="text-xs text-stone-500">המנהל אוסף את הבקשות ויפרסם בקרוב את רשימת ה-15 הסופית ותשלום ה-Bit.</p>
+        </section>
+      )}
+
+      {/* Published Matchday Live Stats (Teams Table + Goals/Assists) */}
+      {settings.live_stats_published && liveGames.length > 0 && (
+        <section className="space-y-3">
+          <MatchdayTables games={liveGames} colors={settings.team_colors || []} />
         </section>
       )}
 
@@ -631,11 +810,668 @@ function Player() {
           </div>
         </section>
       )}
+
+      {/* Published All-Time Leaderboard */}
+      {settings.alltime_stats_published && allTimeStats.length > 0 && (
+        <section className="space-y-3">
+          <AllTimeTable stats={allTimeStats} />
+        </section>
+      )}
     </Shell>
   )
 }
 
-/* ---------- Admin: FC Card Builder (With Manual OVR, 2x PS+ & Gray PlayStyles Bar) ---------- */
+/* ---------- Live Pitch & Matchday Tracker Page (/live) ---------- */
+function LivePitchPage() {
+  const [pin, setPin] = useState(sessionStorage.getItem('pin') || '')
+  const [authed, setAuthed] = useState(false)
+  const [err, setErr] = useState('')
+  const { settings, confirmed, liveGames, knownNames, reload } = useLive()
+
+  // Match setup state
+  const [teamA, setTeamA] = useState(0)
+  const [teamB, setTeamB] = useState(1)
+  const [rosters, setRosters] = useState({ 0: [], 1: [], 2: [] })
+  const [rostersInitialized, setRostersInitialized] = useState(false)
+  const [addPlayerInput, setAddPlayerInput] = useState({ 0: '', 1: '', 2: '' })
+
+  // Timer state (7:00 = 420s, 6:00 = 360s, +1:00 = 60s stoppage)
+  const [baseMinutes, setBaseMinutes] = useState(7)
+  const [stoppageMinutes, setStoppageMinutes] = useState(1)
+  const [secondsLeft, setSecondsLeft] = useState(420)
+  const [timerRunning, setTimerRunning] = useState(false)
+
+  // Current game score, events & penalties
+  const [events, setEvents] = useState([]) // [{ id, type:'goal'|'assist_only', scorer, assist, team }]
+  const [selectedPlayer, setSelectedPlayer] = useState(null) // { name, team }
+  const [pendingAssist, setPendingAssist] = useState('')
+  const [penaltiesOpen, setPenaltiesOpen] = useState(false)
+  const [penRounds, setPenRounds] = useState([{ a: null, b: null }]) // null | true (scored) | false (missed)
+  const [savingGame, setSavingGame] = useState(false)
+
+  const login = async (e) => {
+    e?.preventDefault()
+    try {
+      if (!(await rpc('check_pin', { p_pin: pin }))) throw new Error()
+      sessionStorage.setItem('pin', pin); setAuthed(true); setErr('')
+    } catch { setErr('קוד שגוי'); sessionStorage.removeItem('pin') }
+  }
+  useEffect(() => { if (pin) login() }, []) // eslint-disable-line
+
+  // Initialize editable rosters from confirmed players' team assignments
+  useEffect(() => {
+    if (confirmed.length > 0 && !rostersInitialized) {
+      const nextR = { 0: [], 1: [], 2: [] }
+      confirmed.forEach((p) => {
+        const t = p.team_index ?? p.draft_team
+        if (t === 0 || t === 1 || t === 2) nextR[t].push(p.player_name)
+      })
+      setRosters(nextR)
+      setRostersInitialized(true)
+    }
+  }, [confirmed, rostersInitialized])
+
+  // Countdown tick
+  useEffect(() => {
+    if (!timerRunning) return
+    const iv = setInterval(() => {
+      setSecondsLeft((prev) => {
+        if (prev <= 1) {
+          setTimerRunning(false)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(iv)
+  }, [timerRunning])
+
+  const selectPreset = (mins, stop = 1) => {
+    setTimerRunning(false)
+    setBaseMinutes(mins)
+    setStoppageMinutes(stop)
+    setSecondsLeft(mins * 60)
+  }
+
+  const addStoppageTime = () => {
+    setSecondsLeft((s) => s + stoppageMinutes * 60)
+    setTimerRunning(true)
+  }
+
+  const colors = settings?.team_colors || ['כתום', 'צהוב', 'כחול']
+  const nameA = colors[teamA] || `קבוצה ${teamA + 1}`
+  const nameB = colors[teamB] || `קבוצה ${teamB + 1}`
+
+  const scoreA = events.filter((e) => e.type === 'goal' && e.team === teamA).length
+  const scoreB = events.filter((e) => e.type === 'goal' && e.team === teamB).length
+  const penScoreA = penRounds.filter((r) => r.a === true).length
+  const penScoreB = penRounds.filter((r) => r.b === true).length
+
+  const moveOrAddPlayerToTeam = (targetTeam, rawName) => {
+    const clean = (rawName || '').trim()
+    if (!clean) return
+    setRosters((prev) => {
+      const updated = {
+        0: prev[0].filter((n) => n !== clean),
+        1: prev[1].filter((n) => n !== clean),
+        2: prev[2].filter((n) => n !== clean),
+      }
+      updated[targetTeam] = [...updated[targetTeam], clean]
+      return updated
+    })
+    setAddPlayerInput((p) => ({ ...p, [targetTeam]: '' }))
+  }
+
+  const removePlayerFromTeam = (teamIdx, pName) => {
+    setRosters((prev) => ({
+      ...prev,
+      [teamIdx]: prev[teamIdx].filter((n) => n !== pName),
+    }))
+  }
+
+  const recordGoal = (scorerName, scorerTeam, assistName = '') => {
+    setEvents((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), type: 'goal', scorer: scorerName, assist: assistName, team: scorerTeam },
+    ])
+    setSelectedPlayer(null)
+    setPendingAssist('')
+  }
+
+  const recordSoloAssist = (assistName, assistTeam) => {
+    setEvents((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), type: 'assist_only', scorer: '', assist: assistName, team: assistTeam },
+    ])
+    setSelectedPlayer(null)
+    setPendingAssist('')
+  }
+
+  const removeEvent = (id) => setEvents((prev) => prev.filter((e) => e.id !== id))
+
+  const togglePenKick = (roundIdx, side) => {
+    setPenRounds((prev) =>
+      prev.map((r, i) => {
+        if (i !== roundIdx) return r
+        const cur = r[side]
+        const nextVal = cur === null ? true : cur === true ? false : null
+        return { ...r, [side]: nextVal }
+      })
+    )
+  }
+
+  const finishAndSaveGame = async () => {
+    let winner = null
+    if (scoreA > scoreB) winner = teamA
+    else if (scoreB > scoreA) winner = teamB
+    else if (penaltiesOpen) {
+      if (penScoreA > penScoreB) winner = teamA
+      else if (penScoreB > penScoreA) winner = teamB
+    }
+
+    const summary = winner === null
+      ? `לשמור תיקו ${scoreA}:${scoreB} (${nameA} נגד ${nameB})?`
+      : `לשמור ניצחון ל${colors[winner]} (${scoreA}:${scoreB}${penaltiesOpen ? ` · פנדלים ${penScoreA}:${penScoreB}` : ''})?`
+
+    if (!confirm(summary)) return
+    setSavingGame(true)
+    try {
+      await rpc('admin_record_live_game', {
+        p_pin: pin,
+        p_team_a: teamA,
+        p_team_b: teamB,
+        p_score_a: scoreA,
+        p_score_b: scoreB,
+        p_pen_a: penaltiesOpen ? penScoreA : 0,
+        p_pen_b: penaltiesOpen ? penScoreB : 0,
+        p_winner_team: winner,
+        p_events: events.map(({ type, scorer, assist, team }) => ({ type, scorer, assist, team })),
+      })
+      await reload()
+      // Reset board for next mini-game & auto-rotate losing team if there was a winner
+      setEvents([])
+      setPenaltiesOpen(false)
+      setPenRounds([{ a: null, b: null }])
+      setTimerRunning(false)
+      setSecondsLeft(baseMinutes * 60)
+      if (winner !== null) {
+        const otherTeam = [0, 1, 2].find((t) => t !== teamA && t !== teamB)
+        if (otherTeam != null) {
+          if (winner === teamA) setTeamB(otherTeam)
+          else setTeamA(otherTeam)
+        }
+      }
+    } catch {
+      alert('שמירת המשחקון נכשלה')
+    }
+    setSavingGame(false)
+  }
+
+  const deleteSavedGame = async (gameId) => {
+    if (!confirm('למחוק את המשחקון הזה ולעדכן מחדש את הסטטיסטיקות?')) return
+    try {
+      await rpc('admin_delete_live_game', { p_pin: pin, p_id: gameId })
+      await reload()
+    } catch { alert('מחיקת המשחקון נכשלה') }
+  }
+
+  const togglePublishStats = async (patch) => {
+    try {
+      await rpc('admin_publish_stats', {
+        p_pin: pin,
+        p_live: patch.live ?? Boolean(settings?.live_stats_published),
+        p_alltime: patch.alltime ?? Boolean(settings?.alltime_stats_published),
+      })
+      await reload()
+    } catch { alert('עדכון הפרסום נכשל') }
+  }
+
+  if (!authed) return (
+    <Shell title="ניהול משחק חי">
+      <form onSubmit={login} className="space-y-3">
+        <label htmlFor="p" className="block font-medium">קוד מנהל</label>
+        <input id="p" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)}
+          className="w-full rounded-lg border border-stone-300 bg-white px-3 py-3" />
+        <button className={`${btn} w-full bg-pitch text-chalk`}>כניסה</button>
+        {err && <p className="text-red-700">{err}</p>}
+      </form>
+    </Shell>
+  )
+
+  const mins = Math.floor(secondsLeft / 60)
+  const secs = String(secondsLeft % 60).padStart(2, '0')
+  const isTimeUp = secondsLeft === 0
+
+  return (
+    <div className="min-h-screen bg-stone-950 text-white pb-10">
+      {/* Top Navigation */}
+      <header className="bg-pitch text-chalk px-4 py-4 shadow-lg">
+        <div className="max-w-2xl mx-auto flex items-center justify-between gap-2">
+          <a href="/admin" className="rounded-lg bg-black/25 px-3 py-1.5 text-sm font-bold hover:bg-black/40">
+            → חזרה לניהול
+          </a>
+          <h1 className="text-xl font-black">⚽ ניהול מחזור חי</h1>
+          <span className="text-xs opacity-80">{liveGames.length} משחקונים</span>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-3 py-4 space-y-5">
+        {/* Football Pitch Arena + Scoreboard */}
+        <section
+          className="relative rounded-3xl border-4 border-white/80 shadow-2xl overflow-hidden p-4 space-y-4"
+          style={{
+            background: 'repeating-linear-gradient(0deg, #166534 0px, #166534 36px, #15803d 36px, #15803d 72px)',
+          }}
+        >
+          {/* Pitch Markings */}
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="w-32 h-32 rounded-full border-2 border-white/35" />
+            <div className="absolute inset-x-0 top-1/2 border-t-2 border-white/35" />
+          </div>
+
+          {/* Scoreboard & Clock */}
+          <div className="relative z-10 bg-stone-950/90 backdrop-blur-md rounded-2xl border border-white/20 p-3 space-y-3 shadow-xl">
+            {/* Team Selectors + Score */}
+            <div className="grid grid-cols-3 items-center text-center gap-2">
+              <div className="space-y-1">
+                <select
+                  aria-label="קבוצה א"
+                  value={teamA}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    if (v === teamB) setTeamB(teamA)
+                    setTeamA(v)
+                  }}
+                  className="w-full rounded-lg bg-stone-800 text-white border border-stone-600 px-2 py-1.5 text-sm font-extrabold text-center"
+                >
+                  {[0, 1, 2].map((t) => <option key={t} value={t}>{colors[t] || `קבוצה ${t + 1}`}</option>)}
+                </select>
+                <div className="w-5 h-5 rounded-full mx-auto border border-white/60" style={{ background: CSS_COLORS[nameA] || '#57534e' }} />
+              </div>
+
+              <div className="space-y-1">
+                <div dir="ltr" className="text-4xl font-black tracking-wider tabular-nums text-amber-300">
+                  {scoreA} : {scoreB}
+                </div>
+                {penaltiesOpen && (
+                  <div className="text-xs font-extrabold text-sky-300" dir="ltr">
+                    PEN ({penScoreA} : {penScoreB})
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <select
+                  aria-label="קבוצה ב"
+                  value={teamB}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    if (v === teamA) setTeamA(teamB)
+                    setTeamB(v)
+                  }}
+                  className="w-full rounded-lg bg-stone-800 text-white border border-stone-600 px-2 py-1.5 text-sm font-extrabold text-center"
+                >
+                  {[0, 1, 2].map((t) => <option key={t} value={t}>{colors[t] || `קבוצה ${t + 1}`}</option>)}
+                </select>
+                <div className="w-5 h-5 rounded-full mx-auto border border-white/60" style={{ background: CSS_COLORS[nameB] || '#57534e' }} />
+              </div>
+            </div>
+
+            {/* Digital Timer + 7m / 6m / +1m Stoppage Controls */}
+            <div className="border-t border-white/15 pt-2.5 flex flex-col items-center gap-2">
+              <div className="flex items-center gap-3">
+                <div
+                  dir="ltr"
+                  className={`text-3xl font-black tabular-nums px-4 py-1 rounded-xl border ${
+                    isTimeUp
+                      ? 'bg-red-900/90 border-red-400 text-red-100 animate-pulse'
+                      : 'bg-black/60 border-white/20 text-white'
+                  }`}
+                >
+                  {mins}:{secs}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTimerRunning((r) => !r)}
+                  className={`rounded-xl px-4 py-2 font-extrabold text-sm ${
+                    timerRunning ? 'bg-amber-500 text-stone-950' : 'bg-green-600 text-white'
+                  }`}
+                >
+                  {timerRunning ? '⏸ עצור' : '▶ הפעל'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setTimerRunning(false); setSecondsLeft(baseMinutes * 60) }}
+                  className="rounded-xl px-3 py-2 font-bold text-xs bg-stone-800 text-stone-200 border border-stone-600"
+                >
+                  איפוס
+                </button>
+              </div>
+
+              {/* Presets: 7 min (regular), 6 min (last 30 mins), +1 min stoppage, custom */}
+              <div className="flex flex-wrap justify-center gap-1.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => selectPreset(7, 1)}
+                  className={`rounded-lg px-2.5 py-1 font-bold border ${
+                    baseMinutes === 7 ? 'bg-white text-stone-950 border-white' : 'bg-stone-800 text-stone-300 border-stone-600'
+                  }`}
+                >
+                  7:00 דק׳ (רגיל)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => selectPreset(6, 1)}
+                  className={`rounded-lg px-2.5 py-1 font-bold border ${
+                    baseMinutes === 6 ? 'bg-white text-stone-950 border-white' : 'bg-stone-800 text-stone-300 border-stone-600'
+                  }`}
+                >
+                  6:00 דק׳ (חצי שעה אחרונה)
+                </button>
+                <button
+                  type="button"
+                  onClick={addStoppageTime}
+                  className="rounded-lg px-2.5 py-1 font-extrabold bg-amber-500/20 text-amber-200 border border-amber-400/50"
+                >
+                  +1:00 תוספת זמן
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const custom = prompt('הזן מספר דקות למשחק:', String(baseMinutes))
+                    if (custom && Number(custom) > 0) selectPreset(Number(custom), 1)
+                  }}
+                  className="rounded-lg px-2.5 py-1 font-bold bg-stone-800 text-stone-300 border border-stone-600"
+                >
+                  ✏️ זמן מותאם
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Head-to-Head Players on Pitch (Tap any player to log Goal / Assist) */}
+          <div className="relative z-10 grid grid-cols-2 gap-3">
+            {[
+              { idx: teamA, label: nameA, list: rosters[teamA] || [] },
+              { idx: teamB, label: nameB, list: rosters[teamB] || [] },
+            ].map((side) => (
+              <div key={side.idx} className="bg-black/55 backdrop-blur-sm rounded-2xl p-2.5 border border-white/25 space-y-2">
+                <div className="flex items-center justify-center gap-1.5 border-b border-white/15 pb-1.5">
+                  <span className="w-3 h-3 rounded-full border border-white" style={{ background: CSS_COLORS[side.label] || '#57534e' }} />
+                  <span className="font-extrabold text-sm">{side.label}</span>
+                </div>
+
+                <div className="space-y-1.5">
+                  {side.list.map((pName) => {
+                    const pGoals = events.filter((e) => e.type === 'goal' && e.scorer === pName).length
+                    const pAssists = events.filter((e) => e.assist === pName).length
+                    return (
+                      <div key={pName} className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPlayer({ name: pName, team: side.idx }); setPendingAssist('') }}
+                          className="flex-1 text-right rounded-xl bg-white/95 hover:bg-amber-100 text-stone-950 px-2.5 py-2 text-xs sm:text-sm font-extrabold shadow flex items-center justify-between transition active:scale-95"
+                        >
+                          <span className="truncate">{pName}</span>
+                          <span className="flex items-center gap-1 shrink-0 text-[11px]">
+                            {pGoals > 0 && <span className="bg-green-700 text-white px-1.5 rounded-full">⚽{pGoals}</span>}
+                            {pAssists > 0 && <span className="bg-amber-500 text-stone-950 px-1.5 rounded-full">🎯{pAssists}</span>}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removePlayerFromTeam(side.idx, pName)}
+                          title="הסר שחקן מקבוצה זו"
+                          className="text-white/60 hover:text-red-300 text-xs px-1"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )
+                  })}
+                  {side.list.length === 0 && (
+                    <p className="text-[11px] text-white/70 text-center py-2">אין שחקנים משובצים</p>
+                  )}
+                </div>
+
+                {/* Live Sub / Add Player from bench or third team */}
+                <div className="pt-1 border-t border-white/15 flex gap-1">
+                  <input
+                    list="live-players-dl"
+                    placeholder="+ הוסף/השלם שחקן..."
+                    value={addPlayerInput[side.idx] || ''}
+                    onChange={(e) => setAddPlayerInput((p) => ({ ...p, [side.idx]: e.target.value }))}
+                    className="w-full rounded-lg bg-black/50 border border-white/25 px-2 py-1 text-xs text-white placeholder-white/50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => moveOrAddPlayerToTeam(side.idx, addPlayerInput[side.idx])}
+                    className="rounded-lg bg-white/20 hover:bg-white/30 px-2 py-1 text-xs font-black"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <datalist id="live-players-dl">
+            {Array.from(new Set([...confirmed.map((c) => c.player_name), ...knownNames])).map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+
+          {/* Current Mini-Game Events Log */}
+          {events.length > 0 && (
+            <div className="relative z-10 bg-stone-950/85 rounded-xl p-2.5 border border-white/15 space-y-1">
+              <div className="text-xs font-bold text-stone-300">אירועים במשחקון הנוכחי:</div>
+              <div className="flex flex-wrap gap-1.5">
+                {events.map((ev) => (
+                  <span key={ev.id} className="inline-flex items-center gap-1.5 rounded-full bg-stone-800 border border-stone-600 px-2.5 py-1 text-xs">
+                    {ev.type === 'goal' ? (
+                      <>
+                        <span>⚽ <b>{ev.scorer}</b></span>
+                        {ev.assist && <span className="text-amber-300">(🎯 {ev.assist})</span>}
+                      </>
+                    ) : (
+                      <span>🎯 בישול: <b>{ev.assist}</b></span>
+                    )}
+                    <button type="button" onClick={() => removeEvent(ev.id)} className="text-red-400 font-bold mr-1">✕</button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Penalty Shootout Panel (1v1 rounds + extra sudden-death / rock-paper-scissors rounds) */}
+          <div className="relative z-10 bg-stone-950/90 rounded-2xl p-3 border border-white/20 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-extrabold text-sky-300">🥅 פנדלים להכרעה (במקרה תיקו)</span>
+              <button
+                type="button"
+                onClick={() => setPenaltiesOpen((v) => !v)}
+                className="rounded-lg px-2.5 py-1 text-xs font-bold bg-sky-600 text-white"
+              >
+                {penaltiesOpen ? 'סגור פנדלים' : 'פתח פנדלים'}
+              </button>
+            </div>
+
+            {penaltiesOpen && (
+              <div className="space-y-2 pt-1 border-t border-white/15">
+                <p className="text-[11px] text-stone-300">
+                  לחץ על כל עיגול להחלפה בין <b>⚽ הבקיע</b>, <b>❌ החמיץ</b> או ריק. בתיקו אחרי סבב 2 — זוג או פרד והוסף סבב מכריע:
+                </p>
+                {penRounds.map((r, idx) => (
+                  <div key={idx} className="flex items-center justify-between bg-stone-900 rounded-lg px-3 py-1.5 text-xs">
+                    <span className="font-bold text-stone-400">סבב {idx + 1}</span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => togglePenKick(idx, 'a')}
+                        className="rounded-lg px-2.5 py-1 font-extrabold bg-stone-800 border border-stone-600"
+                      >
+                        {nameA}: {r.a === true ? '⚽' : r.a === false ? '❌' : '⚪'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => togglePenKick(idx, 'b')}
+                        className="rounded-lg px-2.5 py-1 font-extrabold bg-stone-800 border border-stone-600"
+                      >
+                        {nameB}: {r.b === true ? '⚽' : r.b === false ? '❌' : '⚪'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPenRounds((p) => [...p, { a: null, b: null }])}
+                    className="rounded-lg px-3 py-1 text-xs font-bold bg-sky-800 text-white"
+                  >
+                    + הוסף סבב פנדלים
+                  </button>
+                  {penRounds.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setPenRounds((p) => p.slice(0, -1))}
+                      className="rounded-lg px-2.5 py-1 text-xs bg-stone-800 text-stone-300"
+                    >
+                      הסר סבב אחרון
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Save & Finish Mini-Game Button */}
+          <button
+            type="button"
+            disabled={savingGame}
+            onClick={finishAndSaveGame}
+            className="relative z-10 w-full rounded-2xl bg-amber-400 hover:bg-amber-300 text-stone-950 font-black text-base py-3.5 shadow-xl transition"
+          >
+            💾 שמור תוצאה וסיים משחקון ({scoreA}:{scoreB})
+          </button>
+        </section>
+
+        {/* Action Modal When Clicking a Player on the Pitch */}
+        {selectedPlayer && (
+          <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4" onClick={() => setSelectedPlayer(null)}>
+            <div className="bg-stone-900 border border-stone-700 rounded-2xl w-full max-w-sm p-4 space-y-4 text-white" onClick={(e) => e.stopPropagation()}>
+              <div className="text-center">
+                <div className="text-xs text-stone-400">{colors[selectedPlayer.team]}</div>
+                <h3 className="text-xl font-black">{selectedPlayer.name}</h3>
+              </div>
+
+              <div className="space-y-2 bg-stone-800/80 p-3 rounded-xl border border-stone-700">
+                <label className="block text-xs font-bold text-amber-300">
+                  מי בישל את הגול? (אופציונלי — אפשר להשאיר ללא בישול)
+                </label>
+                <select
+                  value={pendingAssist}
+                  onChange={(e) => setPendingAssist(e.target.value)}
+                  className="w-full rounded-lg bg-stone-950 border border-stone-600 px-3 py-2 text-sm text-white"
+                >
+                  <option value="">ללא בישול (סולו / ריבאונד)</option>
+                  {(rosters[selectedPlayer.team] || [])
+                    .filter((n) => n !== selectedPlayer.name)
+                    .map((mate) => (
+                      <option key={mate} value={mate}>🎯 {mate}</option>
+                    ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => recordGoal(selectedPlayer.name, selectedPlayer.team, pendingAssist)}
+                  className="w-full rounded-xl bg-green-600 hover:bg-green-500 text-white font-black py-3 text-base shadow"
+                >
+                  ⚽ סמן גול {pendingAssist ? `+ בישול ל${pendingAssist}` : '(ללא בישול)'}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => recordSoloAssist(selectedPlayer.name, selectedPlayer.team)}
+                className="w-full rounded-xl bg-amber-500/20 border border-amber-400 text-amber-200 font-bold py-2.5 text-sm"
+              >
+                🎯 סמן בישול בלבד ל{selectedPlayer.name}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedPlayer(null)}
+                className="w-full rounded-xl bg-stone-800 text-stone-300 py-2 text-sm font-bold"
+              >
+                ביטול
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Publish Controls for Matchday & All-Time Tables */}
+        <section className="bg-stone-900 rounded-2xl p-4 border border-stone-700 space-y-3">
+          <h2 className="text-base font-extrabold text-amber-300">📢 פרסום טבלאות לעמוד הראשי של השחקנים</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => togglePublishStats({ live: !settings?.live_stats_published })}
+              className={`rounded-xl py-3 px-3 font-extrabold text-xs sm:text-sm border ${
+                settings?.live_stats_published
+                  ? 'bg-green-700 text-white border-green-500'
+                  : 'bg-stone-800 text-stone-200 border-stone-600'
+              }`}
+            >
+              {settings?.live_stats_published
+                ? '👁️ טבלת המחזור מפורסמת (לחץ להסתרה)'
+                : '🙈 פרסם טבלת מחזור (מנצחת + שערים/בישולים)'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => togglePublishStats({ alltime: !settings?.alltime_stats_published })}
+              className={`rounded-xl py-3 px-3 font-extrabold text-xs sm:text-sm border ${
+                settings?.alltime_stats_published
+                  ? 'bg-purple-800 text-white border-purple-500'
+                  : 'bg-stone-800 text-stone-200 border-stone-600'
+              }`}
+            >
+              {settings?.alltime_stats_published
+                ? '👁️ טבלת שיאים כללית מפורסמת (לחץ להסתרה)'
+                : '📊 פרסם טבלת שיאים וסטטיסטיקה כללית'}
+            </button>
+          </div>
+        </section>
+
+        {/* Live Matchday Tables Preview (Text dark inside white cards) */}
+        <div className="text-stone-950">
+          <MatchdayTables games={liveGames} colors={colors} />
+        </div>
+
+        {/* History of Played Mini-Games Today */}
+        {liveGames.length > 0 && (
+          <section className="bg-stone-900 rounded-2xl p-4 border border-stone-700 space-y-2">
+            <h3 className="text-sm font-extrabold text-stone-200">היסטוריית משחקונים היום ({liveGames.length})</h3>
+            <ul className="divide-y divide-stone-800 text-xs">
+              {liveGames.map((g, i) => (
+                <li key={g.id} className="py-2 flex items-center justify-between gap-2">
+                  <div>
+                    <span className="text-stone-400 ml-2">#{i + 1}</span>
+                    <b>{colors[g.team_a]}</b> {g.score_a} - {g.score_b} <b>{colors[g.team_b]}</b>
+                    {(g.pen_a > 0 || g.pen_b > 0) && <span className="text-sky-300 mr-1">(פנדלים {g.pen_a}:{g.pen_b})</span>}
+                  </div>
+                  <button type="button" onClick={() => deleteSavedGame(g.id)} className="text-red-400 font-bold px-2">
+                    מחק
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </main>
+    </div>
+  )
+}
+
+/* ---------- Admin: FC Card Builder ---------- */
 function FcCardModal({ name, initial, onSave, onClose }) {
   const [c, setC] = useState({
     ...DEFAULT_CARD,
@@ -777,7 +1613,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
       <div className="bg-chalk w-full max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl p-4 space-y-4" onClick={(e) => e.stopPropagation()}>
         <FutCard name={name} card={c} interactivePhoto={interactivePhotoNode} />
 
-        {/* FUT.GG-style PlayStyles Bar (Gold PS+ & Gray PlayStyles) - Admin Only */}
         <AdminPlaystylesRow
           plusList={[c.playstyle_plus, c.playstyle_plus_2]}
           grayList={c.playstyles || []}
@@ -807,7 +1642,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
           )}
         </div>
 
-        {/* Independent Manual OVR Control (Does NOT affect 1-5 match rating or 6 stats) */}
         <div className="bg-white rounded-xl p-3 border border-stone-200 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-sm font-extrabold text-stone-800">אוברול (OVR) על הקלף</span>
@@ -841,9 +1675,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
               onBlur={() => set('ovr', clamp(currentOvr, 40, 99))}
             />
           </label>
-          <p className="text-[11px] text-stone-500">
-            * עצמאי לחלוטין: לא משנה את הסטטים למטה ולא משנה את הדירוג (1–5) לחלוקת הכוחות.
-          </p>
         </div>
 
         {STATS.map(([k, label]) => (
@@ -868,7 +1699,6 @@ function FcCardModal({ name, initial, onSave, onClose }) {
           </select>
         </label>
 
-        {/* Skill Moves, Weak Foot, 2x PlayStyle+ (Gold) & Gray PlayStyles */}
         <div className="bg-white rounded-xl p-3 border border-stone-200 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -982,7 +1812,7 @@ function Admin() {
   const [pin, setPin] = useState(sessionStorage.getItem('pin') || '')
   const [authed, setAuthed] = useState(false)
   const [err, setErr] = useState('')
-  const { settings, reload } = useLive()
+  const { settings, allTimeStats, reload } = useLive()
   const [rows, setRows] = useState([])
   const [draft, setDraft] = useState(null)
   const [ratings, setRatings] = useState({})
@@ -994,7 +1824,9 @@ function Admin() {
   const [rosterSearch, setRosterSearch] = useState('')
   const [newPlayerName, setNewPlayerName] = useState('')
   const [rosterOpen, setRosterOpen] = useState(false)
+  const [allTimeOpen, setAllTimeOpen] = useState(false)
   const [manualName, setManualName] = useState('')
+  const [paidFilter, setPaidFilter] = useState('all') // 'all' | 'paid' | 'unpaid'
   const tried = useRef(false)
 
   const refresh = useCallback(async (p = pin) => {
@@ -1037,6 +1869,7 @@ function Admin() {
         registration_note: settings.registration_note || 'ההרשמה למשחק הקרוב תיפתח ביום רביעי בשעה 10:00',
         bit_enabled: settings.bit_enabled !== false,
         list_published: Boolean(settings.list_published),
+        payment_timeout_hours: Number(settings.payment_timeout_hours ?? 48),
         ntfy_topic: cleanNtfyTopic(settings.ntfy_topic),
       })
     }
@@ -1046,6 +1879,9 @@ function Admin() {
   }, [settings, next])
 
   const confirmedRows = rows.filter((r) => r.status === 'confirmed')
+  const filteredConfirmed = confirmedRows.filter((r) =>
+    paidFilter === 'paid' ? r.is_paid : paidFilter === 'unpaid' ? !r.is_paid : true
+  )
   const allKnownNames = Array.from(new Set([...rows.map((r) => r.player_name), ...Object.keys(ratings)])).sort()
   const colors = settings?.team_colors || []
   const cardOf = (nameOrRow) => {
@@ -1134,6 +1970,28 @@ function Admin() {
     await act('admin_rename_player_rating', { p_old_name: oldName, p_new_name: nextName.trim() })()
   }
 
+  const editPlayerAllTime = async (pName) => {
+    const cur = ratings[pName] || {}
+    const g = prompt(`סה״כ שערים בקריירה עבור ${pName}:`, String(cur.total_goals ?? 0))
+    if (g === null) return
+    const a = prompt(`סה״כ בישולים בקריירה עבור ${pName}:`, String(cur.total_assists ?? 0))
+    if (a === null) return
+    const ts = prompt(`פעמים מלך שערים עבור ${pName}:`, String(cur.awards_top_scorer ?? 0))
+    if (ts === null) return
+    const mvp = prompt(`פעמים כוכב המחזור עבור ${pName}:`, String(cur.awards_mvp ?? 0))
+    if (mvp === null) return
+    const gow = prompt(`פעמים שער המחזור עבור ${pName}:`, String(cur.awards_goal_of_week ?? 0))
+    if (gow === null) return
+    await act('admin_set_player_alltime', {
+      p_name: pName,
+      p_goals: Number(g) || 0,
+      p_assists: Number(a) || 0,
+      p_top_scorer: Number(ts) || 0,
+      p_mvp: Number(mvp) || 0,
+      p_goal_of_week: Number(gow) || 0,
+    })()
+  }
+
   const addManualPlayer = (targetStatus) => async () => {
     const clean = manualName.trim()
     if (clean.length < 2) return alert('יש להזין שם שחקן (לפחות 2 תווים)')
@@ -1219,6 +2077,7 @@ function Admin() {
       p_bit_enabled: nextDraft.bit_enabled,
       p_ntfy_topic: cleanedTopic,
       p_list_published: nextDraft.list_published,
+      p_payment_timeout_hours: Number(nextDraft.payment_timeout_hours ?? 48),
     })()
   }
 
@@ -1241,7 +2100,7 @@ function Admin() {
   )
   const doReset = async (e) => {
     e.preventDefault()
-    if (!confirm('לאפס את המשחק? ההרשמות, הקבוצות ונתוני המחזור יימחקו, והרשימה תחזור למצב מוסתר. הדירוגים, התפקידים, הקלפים ושחקן החודש יישמרו.')) return
+    if (!confirm('לאפס את המשחק? ההרשמות, הקבוצות, משחקוני הלייב ונתוני המחזור יימחקו, והרשימה תחזור למצב מוסתר. הדירוגים, התפקידים, הקלפים, שחקן החודש והסטטיסטיקה הכללית יישמרו.')) return
     await act('admin_reset_match', { p_match_time: next.match_time, p_price: Number(next.price), p_bit_link: next.bit_link })()
     setDraft(null); setAwardsDraft(null); await refresh()
   }
@@ -1289,12 +2148,13 @@ function Admin() {
   )
 
   const by = (s) => rows.filter((r) => r.status === s)
-  const List = ({ title, items, children, actions }) => (
+  const List = ({ title, items, children, actions, extraHeader }) => (
     <section>
       <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
         <h2 className="text-xl font-bold">{title} ({items.length})</h2>
-        {actions && <div className="flex gap-2">{actions}</div>}
+        {actions && <div className="flex gap-2 flex-wrap">{actions}</div>}
       </div>
+      {extraHeader}
       {items.length === 0 && <p className="text-stone-500">אין שחקנים ברשימה.</p>}
       <ul className="divide-y divide-stone-200 bg-white rounded-lg">
         {items.map((r) => (
@@ -1323,8 +2183,21 @@ function Admin() {
     .filter((n) => !rosterSearch.trim() || n.includes(rosterSearch.trim()))
     .sort((a, b) => a.localeCompare(b, 'he'))
 
+  const timeoutHours = Number(draft?.payment_timeout_hours ?? 48)
+  const paidCount = confirmedRows.filter((r) => r.is_paid).length
+  const unpaidCount = confirmedRows.length - paidCount
+
   return (
     <Shell title="ניהול משחק">
+      {/* Live Pitch Mode Entry Button */}
+      <a
+        href="/live"
+        className="block w-full rounded-2xl bg-gradient-to-l from-green-800 to-pitch text-chalk p-4 text-center shadow-lg border-2 border-green-500/40 hover:brightness-105 transition"
+      >
+        <div className="text-lg font-black">⚽ כניסה למצב ניהול משחק חי (מגרש, שעון וסטטיסטיקות) ←</div>
+        <div className="text-xs opacity-90 mt-0.5">לוח תוצאות חי · תיעוד גולים ובישולים · פנדלים · טבלת מנצחות</div>
+      </a>
+
       {draft && (
         <section className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm space-y-3">
           <h2 className="text-lg font-extrabold">בקרה מהירה (סינון, פרסום רשימה ו-Bit)</h2>
@@ -1368,9 +2241,32 @@ function Admin() {
               {draft.bit_enabled ? '💳 תשלום Bit פעיל עם הפרסום' : '🚫 כפתור Bit כבוי ידנית'}
             </button>
           </div>
-          <p className="text-xs text-stone-500">
-            * בזמן שרשימת המאושרים מוסתרת, אף שחקן לא רואה מי נכנס וגם כפתור ה-Bit נשאר נעול. ברגע שתלחץ לפרסם, הרשימה תיחשף ורק למאושרים ייפתח ה-Bit.
-          </p>
+
+          {/* Global Payment Timer Control */}
+          <div className="pt-2 border-t border-stone-100 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-extrabold text-stone-700">⏱️ טיימר הדחה אוטומטית לתשלום:</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                [48, '48 שעות'],
+                [24, '24 שעות'],
+                [12, '12 שעות'],
+                [0, 'ללא טיימר (כבוי)'],
+              ].map(([hrs, label]) => (
+                <button
+                  key={hrs}
+                  type="button"
+                  onClick={() => quickToggleSetting({ payment_timeout_hours: hrs })}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-bold border transition ${
+                    timeoutHours === hrs
+                      ? 'bg-stone-900 text-white border-stone-900'
+                      : 'bg-stone-100 text-stone-700 border-stone-300'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </section>
       )}
 
@@ -1406,13 +2302,42 @@ function Admin() {
         </>}
       </List>
 
-      <List title="מגיעים" items={by('confirmed')}
-        actions={by('confirmed').length > 0 && <>
+      <List
+        title="מגיעים"
+        items={filteredConfirmed}
+        actions={confirmedRows.length > 0 && <>
           <button className={`${smBtn} bg-green-50 text-green-800 border border-green-300`}
             onClick={bulk('לסמן את כל המגיעים כשילמו?', 'admin_set_all_paid', { p_is_paid: true })}>סמן לכולם שולם</button>
           <button className={`${smBtn} bg-red-50 text-red-800 border border-red-300`}
             onClick={bulk('לסמן את כל המגיעים כלא שילמו?', 'admin_set_all_paid', { p_is_paid: false })}>סמן לכולם לא שולם</button>
-        </>}>
+          {timeoutHours > 0 && (
+            <button className={`${smBtn} bg-amber-50 text-amber-900 border border-amber-300`}
+              onClick={bulk('לאפס את שעון התשלום לכל המגיעים שעדיין לא שילמו?', 'admin_reset_timers', {})}>⏱️ אפס טיימר</button>
+          )}
+        </>}
+        extraHeader={confirmedRows.length > 0 && (
+          <div className="flex gap-1.5 mb-2 flex-wrap">
+            {[
+              ['all', `הכל (${confirmedRows.length})`],
+              ['paid', `שילמו ✓ (${paidCount})`],
+              ['unpaid', `לא שילמו ⏳ (${unpaidCount})`],
+            ].map(([val, lbl]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setPaidFilter(val)}
+                className={`rounded-full px-3 py-1 text-xs font-extrabold border transition ${
+                  paidFilter === val
+                    ? 'bg-pitch text-chalk border-pitch'
+                    : 'bg-white text-stone-700 border-stone-300'
+                }`}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+        )}
+      >
         {(r) => <>
           {rate(r)}
           {roleSel(r)}
@@ -1423,7 +2348,9 @@ function Admin() {
             <option value="false">לא שולם</option>
             <option value="true">שולם</option>
           </select>
-          {!r.is_paid && <span className="text-sm text-stone-600"><Countdown since={r.approved_at} /></span>}
+          {!r.is_paid && timeoutHours > 0 && (
+            <span className="text-sm text-stone-600"><Countdown since={r.approved_at} hours={timeoutHours} /></span>
+          )}
           {remove(r)}
         </>}
       </List>
@@ -1474,7 +2401,7 @@ function Admin() {
       {awardsDraft && (
         <section className="space-y-4 bg-white rounded-xl p-4 border border-stone-200">
           <h2 className="text-xl font-bold">נתוני מחזור (קלפי TOTW 🔥)</h2>
-          <p className="text-xs text-stone-600">אפשר לבחור שחקן אחד או להוסיף שחקן שני (תיקו) — כל שחקן יקבל קלף TOTW נפרד משלו!</p>
+          <p className="text-xs text-stone-600">פרסום נתוני המחזור מוסיף אוטומטית +1 לזכיות בטבלת השיאים הכללית!</p>
           {AWARDS.map(([k1, k2, icon, label]) => {
             const hasSecond = showSecondWinner[k1] || Boolean(awardsDraft[k2]?.trim())
             return (
@@ -1553,11 +2480,54 @@ function Admin() {
         </section>
       )}
 
+      {/* Collapsible All-Time Stats & Awards Ledger */}
+      <section className="bg-white rounded-xl p-4 border border-stone-200 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-xl font-bold">טבלת שיאים וסטטיסטיקה קבועה</h2>
+            <p className="text-xs text-stone-500">שערים, בישולים וזכיות מצטברות של כל השחקנים.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAllTimeOpen((v) => !v)}
+            className="rounded-lg px-3 py-1.5 text-sm font-bold bg-stone-100 border border-stone-300 shrink-0"
+          >
+            {allTimeOpen ? 'הסתר ▲' : 'הצג ▼'}
+          </button>
+        </div>
+
+        {allTimeOpen && (
+          <div className="space-y-3 pt-2 border-t border-stone-200">
+            <button
+              type="button"
+              onClick={async () => {
+                await rpc('admin_publish_stats', {
+                  p_pin: pin,
+                  p_live: Boolean(settings?.live_stats_published),
+                  p_alltime: !settings?.alltime_stats_published,
+                })
+                await reload()
+              }}
+              className={`w-full rounded-xl py-2.5 px-3 font-extrabold text-sm border ${
+                settings?.alltime_stats_published
+                  ? 'bg-purple-900 text-white border-purple-950'
+                  : 'bg-stone-100 text-stone-800 border-stone-300'
+              }`}
+            >
+              {settings?.alltime_stats_published
+                ? '👁️ טבלת השיאים מפורסמת באתר (לחץ להסתרה)'
+                : '📢 פרסם טבלת שיאים בעמוד הראשי'}
+            </button>
+            <AllTimeTable stats={allTimeStats} />
+          </div>
+        )}
+      </section>
+
       <section className="bg-white rounded-xl p-4 border border-stone-200 space-y-3">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold">מאגר שחקנים ודירוגים קבוע ({Object.keys(ratings).length})</h2>
-            <p className="text-xs text-stone-500">ערוך שמות, דירוגים, תפקידים וקלפי FC של כל השחקנים בכל זמן, או הוסף שחקנים חדשים מראש.</p>
+            <p className="text-xs text-stone-500">ערוך שמות, דירוגים, תפקידים, קלפי FC וסטטיסטיקה היסטורית.</p>
           </div>
           <button
             type="button"
@@ -1610,7 +2580,9 @@ function Admin() {
                           ✏️
                         </button>
                       </div>
-                      <div className="text-[11px] text-stone-500">OVR {ovrOf(cardOf(pName))} · {cardOf(pName).height_cm} ס"מ</div>
+                      <div className="text-[11px] text-stone-500">
+                        OVR {ovrOf(cardOf(pName))} · ⚽{ratings[pName]?.total_goals ?? 0} 🎯{ratings[pName]?.total_assists ?? 0}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -1618,6 +2590,9 @@ function Admin() {
                     {roleSel(pName)}
                     <button type="button" className={`${smBtn} bg-stone-800 text-white`} onClick={() => setCardFor(pName)}>
                       קלף FC
+                    </button>
+                    <button type="button" className={`${smBtn} bg-amber-100 text-amber-900 border border-amber-300`} onClick={() => editPlayerAllTime(pName)} title="ערוך שערים/בישולים/תארים">
+                      📊
                     </button>
                     <button type="button" className="text-red-600 text-xs font-bold px-2 py-1" onClick={() => deleteFromRoster(pName)}>
                       🗑️
@@ -1640,6 +2615,18 @@ function Admin() {
                 dir={k === 'bit_link' ? 'ltr' : undefined} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} />
             </label>
           ))}
+
+          <label className="block">
+            <span className="text-sm font-medium">שעות טיימר להדחה אוטומטית (0 = ללא טיימר)</span>
+            <input
+              className={field}
+              type="number"
+              min="0"
+              max="168"
+              value={draft.payment_timeout_hours ?? 48}
+              onChange={(e) => setDraft({ ...draft, payment_timeout_hours: Number(e.target.value) })}
+            />
+          </label>
 
           <div className="pt-2 border-t border-stone-200 space-y-1">
             <span className="text-sm font-bold">🔔 התראות Push לאייפון בהרשמה חדשה (ntfy)</span>
@@ -1667,7 +2654,7 @@ function Admin() {
       {next && (
         <form onSubmit={doReset} className="space-y-3 border-t border-stone-300 pt-5">
           <h2 className="text-xl font-bold">איפוס משחק לשבוע הבא</h2>
-          <p className="text-sm text-stone-600">מוחק את כל ההרשמות ונתוני המחזור ומבטל פרסום קבוצות ורשימת מאושרים. הדירוגים, התפקידים, הקלפים ושחקן החודש נשמרים.</p>
+          <p className="text-sm text-stone-600">מוחק את כל ההרשמות, הקבוצות, משחקוני הלייב ונתוני המחזור ומבטל פרסום. הדירוגים, הקלפים, שחקן החודש וטבלת השיאים הכללית נשמרים.</p>
           {[['match_time', 'תאריך וזמן המשחק הבא'], ['price', 'מחיר (₪)'], ['bit_link', 'קישור Bit']].map(([k, label]) => (
             <label key={k} className="block"><span className="text-sm">{label}</span>
               <input className={field} value={next[k]} type={k === 'price' ? 'number' : 'text'}
@@ -1687,5 +2674,7 @@ function Admin() {
 }
 
 export default function App() {
-  return location.pathname.startsWith('/admin') ? <Admin /> : <Player />
+  if (location.pathname.startsWith('/live')) return <LivePitchPage />
+  if (location.pathname.startsWith('/admin')) return <Admin />
+  return <Player />
 }
