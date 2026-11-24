@@ -222,7 +222,9 @@ const PinIcon = () => <Ico><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11
 
 const btn = 'rounded-lg px-4 py-2 font-medium disabled:opacity-50'
 
+const COLOR_OPTIONS = ['כתום', 'צהוב', 'כחול', 'ירוק', 'אדום', 'לבן', 'שחור', 'סגול', 'ורוד']
 const CSS_COLORS = { 'שחור': '#111', 'לבן': '#fff', 'אדום': '#d62828', 'כחול': '#1d4ed8', 'ירוק': '#15803d', 'צהוב': '#facc15', 'כתום': '#ea580c', 'סגול': '#7e22ce', 'ורוד': '#ec4899' }
+const isLightBg = (colorName) => ['לבן', 'צהוב'].includes(colorName)
 
 function Teams({ colors, players }) {
   return (
@@ -920,6 +922,9 @@ function LivePitchPage() {
 
   const [teamA, setTeamA] = useState(0)
   const [teamB, setTeamB] = useState(1)
+  const [liveColors, setLiveColors] = useState(['כתום', 'צהוב', 'כחול'])
+  const [colorsSynced, setColorsSynced] = useState(false)
+
   const [rosters, setRosters] = useState({ 0: [], 1: [], 2: [] })
   const [rostersInitialized, setRostersInitialized] = useState(false)
   const [addPlayerInput, setAddPlayerInput] = useState({ 0: '', 1: '', 2: '' })
@@ -930,8 +935,12 @@ function LivePitchPage() {
   const [timerRunning, setTimerRunning] = useState(false)
 
   const [events, setEvents] = useState([])
-  const [selectedPlayer, setSelectedPlayer] = useState(null)
-  const [pendingAssist, setPendingAssist] = useState('')
+  // Goal dialog state: { teamIdx, scorer, assist }
+  const [goalModal, setGoalModal] = useState(null)
+  // Two-goal prompt state: { leadingTeamIdx, leadingTeamName, scoreText }
+  const [twoGoalPrompt, setTwoGoalPrompt] = useState(null)
+  const [dismissedTwoGoalKey, setDismissedTwoGoalKey] = useState('')
+
   const [penaltiesOpen, setPenaltiesOpen] = useState(false)
   const [penRounds, setPenRounds] = useState([{ a: null, b: null }])
   const [savingGame, setSavingGame] = useState(false)
@@ -947,6 +956,17 @@ function LivePitchPage() {
     } catch { setErr('קוד שגוי'); sessionStorage.removeItem('pin') }
   }
   useEffect(() => { if (pin) login() }, []) // eslint-disable-line
+
+  useEffect(() => {
+    if (settings?.team_colors?.length && !colorsSynced) {
+      setLiveColors([
+        settings.team_colors[0] || 'כתום',
+        settings.team_colors[1] || 'צהוב',
+        settings.team_colors[2] || 'כחול',
+      ])
+      setColorsSynced(true)
+    }
+  }, [settings, colorsSynced])
 
   useEffect(() => {
     if (confirmed.length > 0 && !rostersInitialized) {
@@ -986,16 +1006,32 @@ function LivePitchPage() {
     setTimerRunning(true)
   }
 
-  const colors = settings?.team_colors || ['כתום', 'צהוב', 'כחול']
-  const nameA = colors[teamA] || `קבוצה ${teamA + 1}`
-  const nameB = colors[teamB] || `קבוצה ${teamB + 1}`
+  const nameA = liveColors[teamA] || `קבוצה ${teamA + 1}`
+  const nameB = liveColors[teamB] || `קבוצה ${teamB + 1}`
 
+  // Exact per-team scores mapped to the exact team index
   const scoreA = events.filter((e) => e.type === 'goal' && Number(e.team) === Number(teamA)).length
   const scoreB = events.filter((e) => e.type === 'goal' && Number(e.team) === Number(teamB)).length
   const penScoreA = penRounds.filter((r) => r.a === true).length
   const penScoreB = penRounds.filter((r) => r.b === true).length
 
-  const activeGamesList = authed ? liveGames : (liveGames.length > 0 ? liveGames : publicGames)
+  // Check if a team just reached 2 goals and prompt to end or continue (e.g., if goal gets disallowed)
+  useEffect(() => {
+    const key = `${teamA}:${teamB}:${scoreA}:${scoreB}`
+    if (scoreA >= 2 && scoreA > scoreB && key !== dismissedTwoGoalKey) {
+      setTwoGoalPrompt({ leadingTeamIdx: teamA, leadingTeamName: nameA, scoreText: `${nameA} ${scoreA} - ${scoreB} ${nameB}` })
+    } else if (scoreB >= 2 && scoreB > scoreA && key !== dismissedTwoGoalKey) {
+      setTwoGoalPrompt({ leadingTeamIdx: teamB, leadingTeamName: nameB, scoreText: `${nameA} ${scoreA} - ${scoreB} ${nameB}` })
+    }
+  }, [scoreA, scoreB, teamA, teamB, nameA, nameB, dismissedTwoGoalKey])
+
+  const setTeamColorLive = (teamIdx, nextColor) => {
+    setLiveColors((prev) => {
+      const copy = [...prev]
+      copy[teamIdx] = nextColor
+      return copy
+    })
+  }
 
   const moveOrAddPlayerToTeam = (targetTeam, rawName) => {
     const clean = (rawName || '').trim()
@@ -1019,25 +1055,39 @@ function LivePitchPage() {
     }))
   }
 
-  const recordGoal = (scorerName, scorerTeam, assistName = '') => {
-    setEvents((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), type: 'goal', scorer: scorerName, assist: assistName, team: Number(scorerTeam) },
-    ])
-    setSelectedPlayer(null)
-    setPendingAssist('')
+  const openGoalPickerForTeam = (teamIdx) => {
+    const teamPlayers = rosters[teamIdx] || []
+    setGoalModal({
+      teamIdx,
+      scorer: teamPlayers[0] || '',
+      assist: '',
+    })
   }
 
-  const recordSoloAssist = (assistName, assistTeam) => {
+  const confirmGoal = () => {
+    if (!goalModal) return
     setEvents((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), type: 'assist_only', scorer: '', assist: assistName, team: Number(assistTeam) },
+      {
+        id: crypto.randomUUID(),
+        type: 'goal',
+        scorer: goalModal.scorer || (liveColors[goalModal.teamIdx] || 'גול'),
+        assist: goalModal.assist || '',
+        team: Number(goalModal.teamIdx),
+      },
     ])
-    setSelectedPlayer(null)
-    setPendingAssist('')
+    setGoalModal(null)
   }
 
-  const removeEvent = (id) => setEvents((prev) => prev.filter((e) => e.id !== id))
+  const removeEvent = (id) => {
+    setEvents((prev) => prev.filter((e) => e.id !== id))
+    setTwoGoalPrompt(null)
+  }
+
+  const undoLastEvent = () => {
+    setEvents((prev) => prev.slice(0, -1))
+    setTwoGoalPrompt(null)
+  }
 
   const togglePenKick = (roundIdx, side) => {
     setPenRounds((prev) =>
@@ -1050,21 +1100,24 @@ function LivePitchPage() {
     )
   }
 
-  const finishAndSaveGame = async () => {
-    let winner = null
-    if (scoreA > scoreB) winner = teamA
-    else if (scoreB > scoreA) winner = teamB
-    else if (penaltiesOpen) {
-      if (penScoreA > penScoreB) winner = teamA
-      else if (penScoreB > penScoreA) winner = teamB
+  const finishAndSaveGame = async (forcedWinner = null, skipConfirm = false) => {
+    let winner = forcedWinner
+    if (winner === null) {
+      if (scoreA > scoreB) winner = teamA
+      else if (scoreB > scoreA) winner = teamB
+      else if (penaltiesOpen) {
+        if (penScoreA > penScoreB) winner = teamA
+        else if (penScoreB > penScoreA) winner = teamB
+      }
     }
 
     const summary = winner === null
-      ? `לשמור תיקו ${scoreA}:${scoreB} (${nameA} נגד ${nameB})?`
-      : `לשמור ניצחון ל${colors[winner]} (${scoreA}:${scoreB}${penaltiesOpen ? ` · פנדלים ${penScoreA}:${penScoreB}` : ''})?`
+      ? `לשמור תיקו ${nameA} ${scoreA} - ${scoreB} ${nameB}?`
+      : `לשמור ניצחון ל${liveColors[winner]} (${nameA} ${scoreA} - ${scoreB} ${nameB}${penaltiesOpen ? ` · פנדלים ${penScoreA}:${penScoreB}` : ''})?`
 
-    if (!confirm(summary)) return
+    if (!skipConfirm && !confirm(summary)) return
     setSavingGame(true)
+    setTwoGoalPrompt(null)
     try {
       const cleanEvents = events.map(({ type, scorer, assist, team }) => ({ type, scorer, assist, team }))
       if (authed) {
@@ -1100,6 +1153,7 @@ function LivePitchPage() {
       }
 
       setEvents([])
+      setDismissedTwoGoalKey('')
       setPenaltiesOpen(false)
       setPenRounds([{ a: null, b: null }])
       setTimerRunning(false)
@@ -1160,13 +1214,19 @@ function LivePitchPage() {
   const mins = Math.floor(secondsLeft / 60)
   const secs = String(secondsLeft % 60).padStart(2, '0')
   const isTimeUp = secondsLeft === 0
+  const activeGamesList = authed ? liveGames : (liveGames.length > 0 ? liveGames : publicGames)
+
+  const renderTeamPillStyle = (colorLabel) => ({
+    backgroundColor: CSS_COLORS[colorLabel] || '#334155',
+    color: isLightBg(colorLabel) ? '#111827' : '#ffffff',
+  })
 
   return (
     <div className="min-h-screen bg-stone-950 text-white pb-10">
       <header className="bg-pitch text-chalk px-4 py-4 shadow-lg">
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-2">
           <a href="/" className="rounded-lg bg-black/25 px-3 py-1.5 text-sm font-bold hover:bg-black/40">
-            → חזרה לעמוד הראשי
+            → עמוד ראשי
           </a>
           <h1 className="text-xl font-black">⚽ משחק חי</h1>
           <span className="text-xs opacity-80">{activeGamesList.length} משחקונים</span>
@@ -1185,60 +1245,101 @@ function LivePitchPage() {
             <div className="absolute inset-x-0 top-1/2 border-t-2 border-white/35" />
           </div>
 
+          {/* Scoreboard with Unambiguous Team-Bound Score Cards */}
           <div className="relative z-10 bg-stone-950/90 backdrop-blur-md rounded-2xl border border-white/20 p-3 space-y-3 shadow-xl">
-            <div dir="ltr" className="grid grid-cols-3 items-center text-center gap-2">
-              <div className="space-y-1">
-                <select
-                  aria-label="קבוצה שמאל"
-                  value={teamA}
-                  onChange={(e) => {
-                    const v = Number(e.target.value)
-                    if (v === teamB) setTeamB(teamA)
-                    setTeamA(v)
-                  }}
-                  className="w-full rounded-lg bg-stone-800 text-white border border-stone-600 px-2 py-1.5 text-sm font-extrabold text-center"
-                >
-                  {[0, 1, 2].map((t) => <option key={t} value={t}>{colors[t] || `קבוצה ${t + 1}`}</option>)}
-                </select>
+            <div className="grid grid-cols-2 gap-3 text-center">
+              {/* Team A Box */}
+              <div className="rounded-2xl bg-stone-900 border border-white/15 p-2.5 space-y-1.5">
                 <div className="flex items-center justify-center gap-1.5">
-                  <span className="w-4 h-4 rounded-full border border-white/60" style={{ background: CSS_COLORS[nameA] || '#57534e' }} />
-                  <span className="text-xs font-bold text-stone-300">{nameA}</span>
+                  <span className="w-3.5 h-3.5 rounded-full border border-white/70 shrink-0" style={{ background: CSS_COLORS[nameA] || '#57534e' }} />
+                  <select
+                    aria-label="בחר קבוצה ראשונה"
+                    value={teamA}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (v === teamB) setTeamB(teamA)
+                      setTeamA(v)
+                    }}
+                    className="rounded-lg bg-stone-800 text-white border border-stone-600 px-2 py-1 text-xs font-extrabold"
+                  >
+                    {[0, 1, 2].map((t) => <option key={t} value={t}>{liveColors[t] || `קבוצה ${t + 1}`}</option>)}
+                  </select>
+                  <select
+                    aria-label={`צבע ${nameA}`}
+                    value={nameA}
+                    onChange={(e) => setTeamColorLive(teamA, e.target.value)}
+                    className="rounded-lg bg-stone-800 text-amber-200 border border-stone-600 px-1.5 py-1 text-[11px] font-bold"
+                    title="החלף צבע לקבוצה בלייב"
+                  >
+                    {COLOR_OPTIONS.map((cName) => <option key={cName} value={cName}>🎨 {cName}</option>)}
+                  </select>
+                </div>
+                <div className="text-4xl font-black tabular-nums text-amber-300 leading-none py-1">
+                  {scoreA}
+                </div>
+                <div className="text-xs font-extrabold text-stone-300">
+                  שערים: {nameA} {penaltiesOpen ? `(פנדלים: ${penScoreA})` : ''}
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <div className="text-4xl font-black tracking-wider tabular-nums text-amber-300">
-                  {scoreA} : {scoreB}
-                </div>
-                {penaltiesOpen && (
-                  <div className="text-xs font-extrabold text-sky-300">
-                    PEN ({penScoreA} : {penScoreB})
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <select
-                  aria-label="קבוצה ימין"
-                  value={teamB}
-                  onChange={(e) => {
-                    const v = Number(e.target.value)
-                    if (v === teamA) setTeamA(teamB)
-                    setTeamB(v)
-                  }}
-                  className="w-full rounded-lg bg-stone-800 text-white border border-stone-600 px-2 py-1.5 text-sm font-extrabold text-center"
-                >
-                  {[0, 1, 2].map((t) => <option key={t} value={t}>{colors[t] || `קבוצה ${t + 1}`}</option>)}
-                </select>
+              {/* Team B Box */}
+              <div className="rounded-2xl bg-stone-900 border border-white/15 p-2.5 space-y-1.5">
                 <div className="flex items-center justify-center gap-1.5">
-                  <span className="w-4 h-4 rounded-full border border-white/60" style={{ background: CSS_COLORS[nameB] || '#57534e' }} />
-                  <span className="text-xs font-bold text-stone-300">{nameB}</span>
+                  <span className="w-3.5 h-3.5 rounded-full border border-white/70 shrink-0" style={{ background: CSS_COLORS[nameB] || '#57534e' }} />
+                  <select
+                    aria-label="בחר קבוצה שנייה"
+                    value={teamB}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (v === teamA) setTeamA(teamB)
+                      setTeamB(v)
+                    }}
+                    className="rounded-lg bg-stone-800 text-white border border-stone-600 px-2 py-1 text-xs font-extrabold"
+                  >
+                    {[0, 1, 2].map((t) => <option key={t} value={t}>{liveColors[t] || `קבוצה ${t + 1}`}</option>)}
+                  </select>
+                  <select
+                    aria-label={`צבע ${nameB}`}
+                    value={nameB}
+                    onChange={(e) => setTeamColorLive(teamB, e.target.value)}
+                    className="rounded-lg bg-stone-800 text-amber-200 border border-stone-600 px-1.5 py-1 text-[11px] font-bold"
+                    title="החלף צבע לקבוצה בלייב"
+                  >
+                    {COLOR_OPTIONS.map((cName) => <option key={cName} value={cName}>🎨 {cName}</option>)}
+                  </select>
+                </div>
+                <div className="text-4xl font-black tabular-nums text-amber-300 leading-none py-1">
+                  {scoreB}
+                </div>
+                <div className="text-xs font-extrabold text-stone-300">
+                  שערים: {nameB} {penaltiesOpen ? `(פנדלים: ${penScoreB})` : ''}
                 </div>
               </div>
             </div>
 
+            {/* Big One-Tap Goal Buttons Colored by Each Playing Team */}
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => openGoalPickerForTeam(teamA)}
+                style={renderTeamPillStyle(nameA)}
+                className="rounded-2xl py-3.5 px-3 font-black text-base shadow-lg border border-white/30 active:scale-95 transition"
+              >
+                ⚽ גול ל{nameA}
+              </button>
+              <button
+                type="button"
+                onClick={() => openGoalPickerForTeam(teamB)}
+                style={renderTeamPillStyle(nameB)}
+                className="rounded-2xl py-3.5 px-3 font-black text-base shadow-lg border border-white/30 active:scale-95 transition"
+              >
+                ⚽ גול ל{nameB}
+              </button>
+            </div>
+
+            {/* Timer & Presets */}
             <div className="border-t border-white/15 pt-2.5 flex flex-col items-center gap-2">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 flex-wrap justify-center">
                 <div
                   dir="ltr"
                   className={`text-3xl font-black tabular-nums px-4 py-1 rounded-xl border ${
@@ -1275,7 +1376,7 @@ function LivePitchPage() {
                     baseMinutes === 7 ? 'bg-white text-stone-950 border-white' : 'bg-stone-800 text-stone-300 border-stone-600'
                   }`}
                 >
-                  7:00 דק׳ (רגיל)
+                  7:00 דק׳
                 </button>
                 <button
                   type="button"
@@ -1291,7 +1392,7 @@ function LivePitchPage() {
                   onClick={addStoppageTime}
                   className="rounded-lg px-2.5 py-1 font-extrabold bg-amber-500/20 text-amber-200 border border-amber-400/50"
                 >
-                  +1:00 תוספת זמן
+                  +1:00 תוספת
                 </button>
                 <button
                   type="button"
@@ -1301,12 +1402,13 @@ function LivePitchPage() {
                   }}
                   className="rounded-lg px-2.5 py-1 font-bold bg-stone-800 text-stone-300 border border-stone-600"
                 >
-                  ✏️ זמן מותאם
+                  ✏️ זמן
                 </button>
               </div>
             </div>
           </div>
 
+          {/* Editable Squads on Pitch (Injuries / Subs / Third Team rotation) */}
           <div className="relative z-10 grid grid-cols-2 gap-3">
             {[
               { idx: teamA, label: nameA, list: rosters[teamA] || [] },
@@ -1315,7 +1417,7 @@ function LivePitchPage() {
               <div key={side.idx} className="bg-black/55 backdrop-blur-sm rounded-2xl p-2.5 border border-white/25 space-y-2">
                 <div className="flex items-center justify-center gap-1.5 border-b border-white/15 pb-1.5">
                   <span className="w-3 h-3 rounded-full border border-white" style={{ background: CSS_COLORS[side.label] || '#57534e' }} />
-                  <span className="font-extrabold text-sm">{side.label}</span>
+                  <span className="font-extrabold text-sm">סגל {side.label}</span>
                 </div>
 
                 <div className="space-y-1.5">
@@ -1323,26 +1425,20 @@ function LivePitchPage() {
                     const pGoals = events.filter((e) => e.type === 'goal' && e.scorer === pName).length
                     const pAssists = events.filter((e) => e.assist === pName).length
                     return (
-                      <div key={pName} className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => { setSelectedPlayer({ name: pName, team: side.idx }); setPendingAssist('') }}
-                          className="flex-1 text-right rounded-xl bg-white/95 hover:bg-amber-100 text-stone-950 px-2.5 py-2 text-xs sm:text-sm font-extrabold shadow flex items-center justify-between transition active:scale-95"
-                        >
-                          <span className="truncate">{pName}</span>
-                          <span className="flex items-center gap-1 shrink-0 text-[11px]">
-                            {pGoals > 0 && <span className="bg-green-700 text-white px-1.5 rounded-full">⚽{pGoals}</span>}
-                            {pAssists > 0 && <span className="bg-amber-500 text-stone-950 px-1.5 rounded-full">🎯{pAssists}</span>}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removePlayerFromTeam(side.idx, pName)}
-                          title="הסר שחקן מקבוצה זו"
-                          className="text-white/60 hover:text-red-300 text-xs px-1"
-                        >
-                          ✕
-                        </button>
+                      <div key={pName} className="flex items-center justify-between gap-1 rounded-xl bg-white/95 text-stone-950 px-2.5 py-1.5 text-xs sm:text-sm font-bold shadow">
+                        <span className="truncate">{pName}</span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {pGoals > 0 && <span className="bg-green-700 text-white px-1.5 rounded-full text-[11px]">⚽{pGoals}</span>}
+                          {pAssists > 0 && <span className="bg-amber-500 text-stone-950 px-1.5 rounded-full text-[11px]">🎯{pAssists}</span>}
+                          <button
+                            type="button"
+                            onClick={() => removePlayerFromTeam(side.idx, pName)}
+                            title="הוצא שחקן מסגל זה (פציעה / החלפה)"
+                            className="text-red-600 hover:text-red-800 font-black text-xs px-1"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
                     )
                   })}
@@ -1354,7 +1450,7 @@ function LivePitchPage() {
                 <div className="pt-1 border-t border-white/15 flex gap-1">
                   <input
                     list="live-players-dl"
-                    placeholder="+ הוסף/השלם שחקן..."
+                    placeholder="+ הוסף/החלף שחקן..."
                     value={addPlayerInput[side.idx] || ''}
                     onChange={(e) => setAddPlayerInput((p) => ({ ...p, [side.idx]: e.target.value }))}
                     className="w-full rounded-lg bg-black/50 border border-white/25 px-2 py-1 text-xs text-white placeholder-white/50"
@@ -1362,7 +1458,7 @@ function LivePitchPage() {
                   <button
                     type="button"
                     onClick={() => moveOrAddPlayerToTeam(side.idx, addPlayerInput[side.idx])}
-                    className="rounded-lg bg-white/20 hover:bg-white/30 px-2 py-1 text-xs font-black"
+                    className="rounded-lg bg-white/20 hover:bg-white/30 px-2.5 py-1 text-xs font-black"
                   >
                     +
                   </button>
@@ -1376,30 +1472,35 @@ function LivePitchPage() {
             ))}
           </datalist>
 
+          {/* Current Mini-Game Events + Quick Undo */}
           {events.length > 0 && (
-            <div className="relative z-10 bg-stone-950/85 rounded-xl p-2.5 border border-white/15 space-y-1">
-              <div className="text-xs font-bold text-stone-300">אירועים במשחקון הנוכחי:</div>
+            <div className="relative z-10 bg-stone-950/85 rounded-xl p-2.5 border border-white/15 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-stone-300">גולים ובישולים במשחקון:</span>
+                <button
+                  type="button"
+                  onClick={undoLastEvent}
+                  className="rounded-lg bg-red-900/70 hover:bg-red-800 text-red-100 border border-red-500/40 px-2.5 py-1 text-xs font-bold"
+                >
+                  ↩ בטל גול אחרון
+                </button>
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {events.map((ev) => (
                   <span key={ev.id} className="inline-flex items-center gap-1.5 rounded-full bg-stone-800 border border-stone-600 px-2.5 py-1 text-xs">
-                    {ev.type === 'goal' ? (
-                      <>
-                        <span>⚽ <b>{ev.scorer}</b> <span className="text-stone-400">({colors[ev.team]})</span></span>
-                        {ev.assist && <span className="text-amber-300">(🎯 {ev.assist})</span>}
-                      </>
-                    ) : (
-                      <span>🎯 בישול: <b>{ev.assist}</b></span>
-                    )}
-                    <button type="button" onClick={() => removeEvent(ev.id)} className="text-red-400 font-bold mr-1">✕</button>
+                    <span>⚽ <b>{ev.scorer}</b> <span className="text-amber-300">({liveColors[ev.team]})</span></span>
+                    {ev.assist && <span className="text-sky-300">(🎯 {ev.assist})</span>}
+                    <button type="button" onClick={() => removeEvent(ev.id)} className="text-red-400 font-bold mr-1" title="מחק גול">✕</button>
                   </span>
                 ))}
               </div>
             </div>
           )}
 
+          {/* Penalties Panel */}
           <div className="relative z-10 bg-stone-950/90 rounded-2xl p-3 border border-white/20 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-extrabold text-sky-300">🥅 פנדלים להכרעה (במקרה תיקו)</span>
+              <span className="text-xs font-extrabold text-sky-300">🥅 פנדלים להכרעה (תיקו)</span>
               <button
                 type="button"
                 onClick={() => setPenaltiesOpen((v) => !v)}
@@ -1412,7 +1513,7 @@ function LivePitchPage() {
             {penaltiesOpen && (
               <div className="space-y-2 pt-1 border-t border-white/15">
                 <p className="text-[11px] text-stone-300">
-                  לחץ על כל עיגול להחלפה בין <b>⚽ הבקיע</b>, <b>❌ החמיץ</b> או ריק. בתיקו אחרי סבב 2 — זוג או פרד והוסף סבב מכריע:
+                  סבב לכל קבוצה · בתיקו הוסף סבב (או זוג/פרד לבחירת בועט/שוער):
                 </p>
                 {penRounds.map((r, idx) => (
                   <div key={idx} className="flex items-center justify-between bg-stone-900 rounded-lg px-3 py-1.5 text-xs">
@@ -1441,7 +1542,7 @@ function LivePitchPage() {
                     onClick={() => setPenRounds((p) => [...p, { a: null, b: null }])}
                     className="rounded-lg px-3 py-1 text-xs font-bold bg-sky-800 text-white"
                   >
-                    + הוסף סבב פנדלים
+                    + הוסף סבב
                   </button>
                   {penRounds.length > 1 && (
                     <button
@@ -1449,7 +1550,7 @@ function LivePitchPage() {
                       onClick={() => setPenRounds((p) => p.slice(0, -1))}
                       className="rounded-lg px-2.5 py-1 text-xs bg-stone-800 text-stone-300"
                     >
-                      הסר סבב אחרון
+                      הסר סבב
                     </button>
                   )}
                 </div>
@@ -1460,61 +1561,114 @@ function LivePitchPage() {
           <button
             type="button"
             disabled={savingGame}
-            onClick={finishAndSaveGame}
+            onClick={() => finishAndSaveGame(null, false)}
             className="relative z-10 w-full rounded-2xl bg-amber-400 hover:bg-amber-300 text-stone-950 font-black text-base py-3.5 shadow-xl transition"
           >
-            💾 שמור תוצאה וסיים משחקון ({scoreA}:{scoreB})
+            💾 סיים ושמור משחקון ({nameA} {scoreA} - {scoreB} {nameB})
           </button>
         </section>
 
-        {selectedPlayer && (
-          <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4" onClick={() => setSelectedPlayer(null)}>
+        {/* Quick Goal Modal: Team -> Scorer -> Assist (or No Assist) -> Save */}
+        {goalModal && (
+          <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4" onClick={() => setGoalModal(null)}>
             <div className="bg-stone-900 border border-stone-700 rounded-2xl w-full max-w-sm p-4 space-y-4 text-white" onClick={(e) => e.stopPropagation()}>
               <div className="text-center">
-                <div className="text-xs text-stone-400">{colors[selectedPlayer.team]}</div>
-                <h3 className="text-xl font-black">{selectedPlayer.name}</h3>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black" style={renderTeamPillStyle(liveColors[goalModal.teamIdx])}>
+                  ⚽ גול ל{liveColors[goalModal.teamIdx]}
+                </div>
               </div>
 
-              <div className="space-y-2 bg-stone-800/80 p-3 rounded-xl border border-stone-700">
-                <label className="block text-xs font-bold text-amber-300">
-                  מי בישל את הגול? (אופציונלי — אפשר להשאיר ללא בישול)
-                </label>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-extrabold text-amber-300">מי כבש?</label>
                 <select
-                  value={pendingAssist}
-                  onChange={(e) => setPendingAssist(e.target.value)}
-                  className="w-full rounded-lg bg-stone-950 border border-stone-600 px-3 py-2 text-sm text-white"
+                  value={goalModal.scorer}
+                  onChange={(e) => setGoalModal((m) => ({ ...m, scorer: e.target.value, assist: m.assist === e.target.value ? '' : m.assist }))}
+                  className="w-full rounded-xl bg-stone-950 border border-stone-600 px-3 py-2.5 text-sm font-bold text-white"
                 >
-                  <option value="">ללא בישול (סולו / ריבאונד)</option>
-                  {(rosters[selectedPlayer.team] || [])
-                    .filter((n) => n !== selectedPlayer.name)
-                    .map((mate) => (
-                      <option key={mate} value={mate}>🎯 {mate}</option>
+                  {(rosters[goalModal.teamIdx] || []).map((pName) => (
+                    <option key={pName} value={pName}>{pName}</option>
+                  ))}
+                  {!(rosters[goalModal.teamIdx] || []).length && (
+                    <option value={liveColors[goalModal.teamIdx]}>{liveColors[goalModal.teamIdx]}</option>
+                  )}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-extrabold text-sky-300">מי בישל? (אופציונלי)</label>
+                <select
+                  value={goalModal.assist}
+                  onChange={(e) => setGoalModal((m) => ({ ...m, assist: e.target.value }))}
+                  className="w-full rounded-xl bg-stone-950 border border-stone-600 px-3 py-2.5 text-sm font-bold text-white"
+                >
+                  <option value="">ללא בישול</option>
+                  {(rosters[goalModal.teamIdx] || [])
+                    .filter((pName) => pName !== goalModal.scorer)
+                    .map((pName) => (
+                      <option key={pName} value={pName}>🎯 {pName}</option>
                     ))}
                 </select>
-                <button
-                  type="button"
-                  onClick={() => recordGoal(selectedPlayer.name, selectedPlayer.team, pendingAssist)}
-                  className="w-full rounded-xl bg-green-600 hover:bg-green-500 text-white font-black py-3 text-base shadow"
-                >
-                  ⚽ סמן גול {pendingAssist ? `+ בישול ל${pendingAssist}` : '(ללא בישול)'}
-                </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => recordSoloAssist(selectedPlayer.name, selectedPlayer.team)}
-                className="w-full rounded-xl bg-amber-500/20 border border-amber-400 text-amber-200 font-bold py-2.5 text-sm"
-              >
-                🎯 סמן בישול בלבד ל{selectedPlayer.name}
-              </button>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={confirmGoal}
+                  className="flex-1 rounded-xl bg-green-600 hover:bg-green-500 text-white font-black py-3 text-sm shadow"
+                >
+                  ✓ שמור גול
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGoalModal(null)}
+                  className="rounded-xl bg-stone-800 text-stone-300 px-4 py-3 text-sm font-bold"
+                >
+                  ביטול
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
-              <button
-                type="button"
-                onClick={() => setSelectedPlayer(null)}
-                className="w-full rounded-xl bg-stone-800 text-stone-300 py-2 text-sm font-bold"
-              >
-                ביטול
-              </button>
+        {/* Two-Goal Prompt Modal: "לסיים את המשחק?" with option to continue & delete goal */}
+        {twoGoalPrompt && (
+          <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+            <div className="bg-stone-900 border-2 border-amber-400 rounded-2xl w-full max-w-sm p-5 space-y-4 text-white text-center shadow-2xl">
+              <div className="text-2xl">🏆</div>
+              <h3 className="text-xl font-black text-amber-300">לסיים את המשחק?</h3>
+              <p className="text-sm font-bold text-stone-200">{twoGoalPrompt.scoreText}</p>
+              <p className="text-xs text-stone-400">
+                {twoGoalPrompt.leadingTeamName} הגיעה ל-2 שערים. אם נפסל גול, אפשר להמשיך את המשחק ולמחוק את הגול.
+              </p>
+
+              <div className="space-y-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => finishAndSaveGame(twoGoalPrompt.leadingTeamIdx, true)}
+                  className="w-full rounded-xl bg-amber-400 hover:bg-amber-300 text-stone-950 font-black py-3 text-sm"
+                >
+                  ✓ כן, סיים ושמור משחקון
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDismissedTwoGoalKey(`${teamA}:${teamB}:${scoreA}:${scoreB}`)
+                    setTwoGoalPrompt(null)
+                  }}
+                  className="w-full rounded-xl bg-stone-800 hover:bg-stone-700 text-white font-bold py-2.5 text-sm border border-stone-600"
+                >
+                  ↩ המשך משחק (השאר גולים)
+                </button>
+                {events.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={undoLastEvent}
+                    className="w-full rounded-xl bg-red-950 hover:bg-red-900 text-red-200 font-bold py-2.5 text-xs border border-red-500/40"
+                  >
+                    🗑️ מחק את הגול האחרון והמשך משחק
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1555,7 +1709,7 @@ function LivePitchPage() {
         )}
 
         <div className="text-stone-950">
-          <MatchdayTables games={activeGamesList} colors={colors} />
+          <MatchdayTables games={activeGamesList} colors={liveColors} />
         </div>
 
         {activeGamesList.length > 0 && (
@@ -1566,7 +1720,7 @@ function LivePitchPage() {
                 <li key={g.id} className="py-2 flex items-center justify-between gap-2">
                   <div>
                     <span className="text-stone-400 ml-2">#{i + 1}</span>
-                    <b>{colors[g.team_a]}</b> {g.score_a} - {g.score_b} <b>{colors[g.team_b]}</b>
+                    <b>{liveColors[g.team_a]}</b> {g.score_a} - {g.score_b} <b>{liveColors[g.team_b]}</b>
                     {(g.pen_a > 0 || g.pen_b > 0) && <span className="text-sky-300 mr-1">(פנדלים {g.pen_a}:{g.pen_b})</span>}
                   </div>
                   <button type="button" onClick={() => deleteSavedGame(g.id)} className="text-red-400 font-bold px-2">
@@ -2220,6 +2374,7 @@ function Admin() {
   const doReset = async (e) => {
     e.preventDefault()
     if (!confirm('לאפס את המשחק? ההרשמות, הקבוצות, משחקוני הלייב ונתוני המחזור יימחקו, והרשימה תחזור למצב מוסתר. הדירוגים, הקלפים, שחקן החודש וטבלת השיאים הכללית יישמרו.')) return
+    savePublicLiveGames([])
     await act('admin_reset_match', { p_match_time: next.match_time, p_price: Number(next.price), p_bit_link: next.bit_link })()
     setDraft(null); setAwardsDraft(null); await refresh()
   }
